@@ -1,0 +1,168 @@
+# Release and deployment for the ECS project (Project 2): the same application
+# as EC2, running as containers on Amazon ECS (Fargate).
+#
+# Where pushes to main go is set by the GitHub variable DEPLOY_TARGET:
+#   ec2 (default) -> deploy-ec2.yml; ecs -> this workflow; both -> both.
+# A manual run always deploys to ECS, whatever DEPLOY_TARGET says.
+#
+# Push to main (DEPLOY_TARGET = ecs or both):
+#   CI -> build, push and scan container images in ECR (tagged with the SHA)
+#      -> plan ecs-dev -> apply ecs-dev -> wait for the rollout -> smoke test
+#      -> plan ecs-prod -> [GitHub Environment approval] -> apply -> smoke test
+#
+# Manual run (Actions > Deploy ECS > Run workflow):
+#   * environment + no version : build the selected ref and deploy it there
+#   * environment + version    : deploy an existing release (rollback/redeploy);
+#                                nothing is rebuilt, the release's images are reused
+#
+# Uses the same GitHub Environments (dev, prod), deploy roles and approvals as
+# the EC2 workflow. Each platform has its own Terraform state, VPC, load
+# balancer and database, so deploying one never touches the other.
+
+name: Deploy ECS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        type: choice
+        options: [dev, prod]
+        required: true
+        default: dev
+      version:
+        description: Existing release (commit SHA) to deploy or roll back to. Leave empty to build the selected ref.
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# One deployment at a time; never cancel a running apply.
+concurrency:
+  group: deploy-ecs
+  cancel-in-progress: false
+
+jobs:
+  target:
+    name: Deploy target
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.check.outputs.deploy }}
+    steps:
+      - id: check
+        env:
+          TARGET: ${{ vars.DEPLOY_TARGET || 'ec2' }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          case "$TARGET" in
+            ec2|ecs|both) ;;
+            *) echo "::error::DEPLOY_TARGET must be ec2, ecs or both (it is '$TARGET')"; exit 1 ;;
+          esac
+          if [ "$EVENT" = "workflow_dispatch" ] || [ "$TARGET" = "ecs" ] || [ "$TARGET" = "both" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::DEPLOY_TARGET is '$TARGET', so pushes to main don't deploy to ECS. Run this workflow manually to deploy to ECS anyway."
+            echo "ECS deployment skipped: DEPLOY_TARGET is \`$TARGET\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  ci:
+    name: CI
+    needs: [target]
+    if: needs.target.outputs.deploy == 'true' && inputs.version == ''
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+      id-token: write
+
+  images:
+    name: Container images
+    needs: [ci]
+    if: inputs.version == ''
+    uses: ./.github/workflows/reusable-images.yml
+    with:
+      version: ${{ github.sha }}
+    permissions:
+      contents: read
+      id-token: write
+
+  # ---------------------------------------------------------------------------
+  # dev
+  # ---------------------------------------------------------------------------
+
+  plan-dev:
+    name: Plan ecs-dev
+    needs: [images]
+    if: >-
+      always() &&
+      (github.event_name == 'push' || inputs.environment == 'dev') &&
+      (needs.images.result == 'success' ||
+        (needs.images.result == 'skipped' && inputs.version != ''))
+    uses: ./.github/workflows/reusable-terraform-plan.yml
+    with:
+      platform: ecs
+      environment: dev
+      version: ${{ inputs.version || github.sha }}
+    permissions:
+      contents: read
+      id-token: write
+
+  apply-dev:
+    name: Apply ecs-dev
+    needs: [plan-dev]
+    # Explicit condition: jobs further up (CI, build) are skipped on rollbacks
+    # and manual prod runs, which would otherwise skip this job too.
+    if: ${{ !cancelled() && needs.plan-dev.result == 'success' }}
+    uses: ./.github/workflows/reusable-terraform-apply.yml
+    with:
+      platform: ecs
+      environment: dev
+      version: ${{ inputs.version || github.sha }}
+    permissions:
+      contents: read
+      id-token: write
+
+  # ---------------------------------------------------------------------------
+  # prod (promotion requires approval on the "prod" GitHub Environment)
+  # ---------------------------------------------------------------------------
+
+  plan-prod:
+    name: Plan ecs-prod
+    needs: [images, apply-dev]
+    if: >-
+      always() &&
+      (
+        (github.event_name == 'push' && needs.apply-dev.result == 'success') ||
+        (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod' &&
+          (needs.images.result == 'success' ||
+            (needs.images.result == 'skipped' && inputs.version != '')))
+      )
+    uses: ./.github/workflows/reusable-terraform-plan.yml
+    with:
+      platform: ecs
+      environment: prod
+      version: ${{ inputs.version || github.sha }}
+    permissions:
+      contents: read
+      id-token: write
+
+  apply-prod:
+    name: Apply ecs-prod
+    needs: [plan-prod]
+    # Explicit condition: jobs further up (CI, build) are skipped on rollbacks
+    # and manual prod runs, which would otherwise skip this job too.
+    if: ${{ !cancelled() && needs.plan-prod.result == 'success' }}
+    uses: ./.github/workflows/reusable-terraform-apply.yml
+    with:
+      platform: ecs
+      environment: prod
+      version: ${{ inputs.version || github.sha }}
+    permissions:
+      contents: read
+      id-token: write

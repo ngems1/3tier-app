@@ -1,0 +1,15 @@
+#!/bin/bash
+# Web tier boot configuration. The AMI already contains Nginx and the
+# versioned React build; this only points Nginx at the internal app ALB.
+set -euo pipefail
+
+install -d -m 0755 /etc/three-tier
+cat > /etc/three-tier/web.env <<ENV
+APP_VERSION=${app_version}
+APP_ALB_DNS=${app_alb_dns}
+ENV
+
+/opt/three-tier/bin/render-nginx.sh
+/opt/three-tier/bin/configure-cloudwatch.sh "${cw_agent_cfg}" "${metrics_ns}" "${web_log_grp}"
+
+systemctl enable --now nginx.service

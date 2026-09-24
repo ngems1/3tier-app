@@ -1,0 +1,227 @@
+# Sets up the AWS account from GitHub, without running Terraform on a laptop:
+#
+#   1. state-bucket: the S3 bucket that holds every Terraform state
+#   2. bootstrap:    GitHub OIDC roles, release artifact bucket, ECR repositories
+#
+# It signs in with a role you create once by hand (docs/setup.md, "Option B"),
+# because the roles made by bootstrap don't exist yet. Run it first with
+# "apply" unchecked to review the plans, then again with "apply" checked.
+# Safe to re-run: later runs only apply changes to these two folders.
+
+name: Bootstrap AWS account
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply the changes (unchecked = plan only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: bootstrap
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.16.4"
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  # Must match state-bucket/variables.tf and every backend block.
+  STATE_BUCKET: cloudbatch818-three-tier-tfstate-9ntql4o5
+  STATE_BUCKET_KEY: cloudbatch818-three-tier/state-bucket/terraform.tfstate
+
+jobs:
+  bootstrap:
+    name: Bootstrap (${{ inputs.apply && 'apply' || 'plan only' }})
+    runs-on: ubuntu-latest
+    # Runs in the prod GitHub Environment, so the same required reviewers that
+    # guard production must approve it (its role can manage IAM).
+    environment: prod
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the bootstrap role is configured
+        env:
+          ROLE_ARN: ${{ vars.AWS_BOOTSTRAP_ROLE_ARN }}
+        run: |
+          if [ -z "$ROLE_ARN" ]; then
+            echo "::error::Set the AWS_BOOTSTRAP_ROLE_ARN variable on the 'prod' environment (docs/setup.md, Option B)."
+            exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_BOOTSTRAP_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      # ---------------------------------------------------------------------
+      # 1. State bucket
+      # ---------------------------------------------------------------------
+
+      - name: Does the state bucket exist?
+        id: bucket
+        run: |
+          if out=$(aws s3api head-bucket --bucket "$STATE_BUCKET" 2>&1); then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "State bucket $STATE_BUCKET exists."
+          elif grep -qE '404|Not Found' <<<"$out"; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "State bucket $STATE_BUCKET doesn't exist yet: it will be created."
+          else
+            echo "$out"
+            echo "::error::Can't use bucket $STATE_BUCKET. A 403 means the name is taken by another AWS account (change it in state-bucket/variables.tf, bootstrap/variables.tf and every backend block) or the role has no S3 access."
+            exit 1
+          fi
+
+      # When the bucket exists, the state-bucket folder keeps its own state in
+      # it. On the very first run it starts with local state and moves it into
+      # the bucket right after creating it (see "Move state into the bucket").
+      - name: "state-bucket: terraform init"
+        working-directory: infra/terraform/state-bucket
+        env:
+          BUCKET_EXISTS: ${{ steps.bucket.outputs.exists }}
+        run: |
+          write_backend() {
+            cat > ci_backend.tf <<EOF
+          terraform {
+            backend "s3" {
+              bucket       = "$STATE_BUCKET"
+              key          = "$STATE_BUCKET_KEY"
+              region       = "$AWS_REGION"
+              encrypt      = true
+              use_lockfile = true
+            }
+          }
+          EOF
+          }
+
+          if [ "$BUCKET_EXISTS" = "true" ]; then
+            write_backend
+            terraform init -input=false
+
+            # Bucket exists but its state isn't in it (created from a laptop,
+            # by hand in the console, or an earlier run failed before moving
+            # the state): adopt the existing resources instead of recreating.
+            # Only settings that actually exist are imported; the plan then
+            # creates the missing ones and corrects the rest.
+            if [ -z "$(terraform state list 2>/dev/null || true)" ]; then
+              echo "No state found for the bucket: importing the existing resources."
+              b="$STATE_BUCKET"
+              imports="aws_s3_bucket aws_s3_bucket_server_side_encryption_configuration"
+              if aws s3api get-public-access-block --bucket "$b" >/dev/null 2>&1; then
+                imports="$imports aws_s3_bucket_public_access_block"
+              fi
+              if aws s3api get-bucket-ownership-controls --bucket "$b" >/dev/null 2>&1; then
+                imports="$imports aws_s3_bucket_ownership_controls"
+              fi
+              if [ "$(aws s3api get-bucket-versioning --bucket "$b" --query Status --output text)" != "None" ]; then
+                imports="$imports aws_s3_bucket_versioning"
+              fi
+              if aws s3api get-bucket-lifecycle-configuration --bucket "$b" >/dev/null 2>&1; then
+                imports="$imports aws_s3_bucket_lifecycle_configuration"
+              fi
+              if aws s3api get-bucket-policy --bucket "$b" >/dev/null 2>&1; then
+                imports="$imports aws_s3_bucket_policy"
+              fi
+              for r in $imports; do
+                printf 'import {\n  to = %s.state\n  id = "%s"\n}\n\n' "$r" "$b"
+              done > ci_import.tf
+              cat ci_import.tf
+            fi
+          else
+            terraform init -input=false
+          fi
+
+      - name: "state-bucket: terraform plan"
+        working-directory: infra/terraform/state-bucket
+        run: |
+          terraform plan -input=false -var "bucket_name=$STATE_BUCKET" -var "region=$AWS_REGION" -out=tfplan
+          {
+            echo "### state-bucket plan"
+            echo '```'
+            terraform show -no-color tfplan | tail -c 30000
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "state-bucket: terraform apply"
+        if: inputs.apply
+        working-directory: infra/terraform/state-bucket
+        run: terraform apply -input=false tfplan
+
+      - name: "state-bucket: move state into the bucket"
+        if: inputs.apply && steps.bucket.outputs.exists == 'false'
+        working-directory: infra/terraform/state-bucket
+        run: |
+          cat > ci_backend.tf <<EOF
+          terraform {
+            backend "s3" {
+              bucket       = "$STATE_BUCKET"
+              key          = "$STATE_BUCKET_KEY"
+              region       = "$AWS_REGION"
+              encrypt      = true
+              use_lockfile = true
+            }
+          }
+          EOF
+          terraform init -input=false -migrate-state -force-copy
+          terraform state list
+
+      # ---------------------------------------------------------------------
+      # 2. Bootstrap (needs the state bucket for its own state)
+      # ---------------------------------------------------------------------
+
+      - name: "bootstrap: skipped in plan-only mode on the first run"
+        if: ${{ !inputs.apply && steps.bucket.outputs.exists == 'false' }}
+        run: |
+          echo "::notice::The bootstrap plan needs the state bucket, which doesn't exist yet. Run again with 'apply' checked to create the bucket and then bootstrap."
+          echo "Bootstrap plan skipped: the state bucket doesn't exist yet." >> "$GITHUB_STEP_SUMMARY"
+
+      # The OIDC provider already exists (this workflow signed in through it),
+      # so bootstrap looks it up instead of creating it.
+      - name: "bootstrap: terraform init and plan"
+        id: bootstrap_plan
+        if: inputs.apply || steps.bucket.outputs.exists == 'true'
+        working-directory: infra/terraform/bootstrap
+        run: |
+          terraform init -input=false
+          terraform plan -input=false -var "create_oidc_provider=false" -out=tfplan
+          {
+            echo "### bootstrap plan"
+            echo '```'
+            terraform show -no-color tfplan | tail -c 60000
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "bootstrap: terraform apply"
+        if: inputs.apply
+        working-directory: infra/terraform/bootstrap
+        run: terraform apply -input=false tfplan
+
+      - name: Values to copy into GitHub
+        if: steps.bootstrap_plan.outcome == 'success'
+        working-directory: infra/terraform/bootstrap
+        run: |
+          out=$(terraform output -json)
+          if [ "$(jq 'length' <<<"$out")" = "0" ]; then
+            echo "Bootstrap outputs appear after the first apply." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "### Set these in GitHub (Settings → Secrets and variables → Actions → Variables)"
+            echo
+            echo "| Where | Variable | Value |"
+            echo "|---|---|---|"
+            echo "| Repository | \`AWS_REGION\` | \`$AWS_REGION\` |"
+            echo "| Repository | \`AWS_PLAN_ROLE_ARN\` | \`$(jq -r '.plan_role_arn.value' <<<"$out")\` |"
+            echo "| Repository | \`AWS_BUILD_ROLE_ARN\` | \`$(jq -r '.build_role_arn.value' <<<"$out")\` |"
+            echo "| Repository | \`ARTIFACT_BUCKET\` | \`$(jq -r '.artifact_bucket.value' <<<"$out")\` |"
+            jq -r '.deploy_role_arns.value | to_entries[] | "| Environment `\(.key)` | `AWS_DEPLOY_ROLE_ARN` | `\(.value)` |"' <<<"$out"
+          } >> "$GITHUB_STEP_SUMMARY"

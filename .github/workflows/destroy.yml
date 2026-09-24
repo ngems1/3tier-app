@@ -1,0 +1,185 @@
+# Removes one environment of one platform from AWS (Actions > Destroy > Run
+# workflow), for example to stop paying for a test environment.
+#
+#   platform + environment -> stack:  ec2 dev = dev, ec2 prod = prod,
+#                                     ecs dev = ecs-dev, ecs prod = ecs-prod
+#
+# Safety:
+#   * you must type the stack name to confirm
+#   * it runs in the matching GitHub Environment, so prod needs a reviewer
+#   * it waits for any running deployment of the same platform to finish
+#   * prod keeps a final database snapshot (dev doesn't)
+#
+# What stays afterwards (shared or cheap, and needed to redeploy or roll back):
+# the Terraform state bucket, the bootstrap roles, ECR images, AMIs and their
+# snapshots, and prod's final database snapshot. The environment's KMS key is
+# scheduled for deletion (AWS keeps it for a waiting period first).
+#
+# To bring the environment back, run the matching deploy workflow.
+
+name: Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform
+        type: choice
+        options: [ec2, ecs]
+        required: true
+      environment:
+        description: Environment
+        type: choice
+        options: [dev, prod]
+        required: true
+      confirm:
+        description: "Type the stack name to confirm: dev, prod, ecs-dev or ecs-prod"
+        type: string
+        required: true
+      version:
+        description: Optional. Release (commit SHA) the stack was deployed with; found automatically if empty.
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# Same group as the platform's deploy workflow: never runs during a deployment.
+concurrency:
+  group: deploy-${{ inputs.platform }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.16.4"
+  STACK: ${{ inputs.platform == 'ecs' && 'ecs-' || '' }}${{ inputs.environment }}
+  TF_DIR: infra/terraform/environments/${{ inputs.platform == 'ecs' && 'ecs-' || '' }}${{ inputs.environment }}
+  PROJECT: cloudbatch818-three-tier${{ inputs.platform == 'ecs' && '-ecs' || '' }}
+
+jobs:
+  # Checked before the approval request, so a typo fails straight away.
+  confirm:
+    name: Confirm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the typed stack name
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "$STACK" ]; then
+            echo "::error::To destroy '$STACK', type exactly '$STACK' in the confirm box (you typed '$CONFIRM')."
+            exit 1
+          fi
+          echo "Confirmed: destroying $STACK"
+
+  destroy:
+    name: Destroy ${{ inputs.platform == 'ecs' && 'ecs-' || '' }}${{ inputs.environment }}
+    needs: [confirm]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          # Deleting a Multi-AZ database and NAT gateways can take a while.
+          role-duration-seconds: 7200
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init
+        run: terraform -chdir="$TF_DIR" init -input=false
+
+      - name: Anything to destroy?
+        id: state
+        run: |
+          count=$(terraform -chdir="$TF_DIR" state list 2>/dev/null | wc -l)
+          echo "resources=${count}" >> "$GITHUB_OUTPUT"
+          if [ "${count}" -eq 0 ]; then
+            echo "::notice::${STACK} has no resources in its Terraform state: nothing to destroy."
+            echo "${STACK}: nothing to destroy." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "${STACK} has ${count} resources."
+          fi
+
+      # Terraform reads the release's AMIs (EC2) or images (ECS) even when
+      # destroying, so it needs the version the stack runs.
+      - name: Find the deployed release
+        id: version
+        if: steps.state.outputs.resources != '0'
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="${INPUT_VERSION}"
+          [ -n "${version}" ] || version=$(terraform -chdir="$TF_DIR" output -raw deployed_version 2>/dev/null || true)
+          [ -n "${version}" ] || version=$(aws ssm get-parameter --name "/${PROJECT}/${{ inputs.environment }}/deployed-version" \
+            --query Parameter.Value --output text 2>/dev/null || true)
+          if [ -z "${version}" ]; then
+            echo "::error::Couldn't find the release ${STACK} was deployed with. Run again with the version input set to its commit SHA."
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Release: ${version}"
+
+      # Prod keeps a final snapshot named <project>-prod-final; AWS refuses to
+      # delete the database if a snapshot with that name already exists.
+      - name: Check the final snapshot name is free (prod)
+        if: steps.state.outputs.resources != '0' && inputs.environment == 'prod'
+        run: |
+          snapshot="${PROJECT}-prod-final"
+          if aws rds describe-db-snapshots --db-snapshot-identifier "${snapshot}" >/dev/null 2>&1; then
+            echo "::error::A snapshot named ${snapshot} already exists (from an earlier destroy). Rename or delete it in the RDS console (after copying it if you need it), then run again."
+            exit 1
+          fi
+
+      # Turns off deletion protection on the load balancers and database. It
+      # changes nothing in dev, where protection is already off.
+      - name: Remove deletion protection
+        if: steps.state.outputs.resources != '0'
+        run: |
+          terraform -chdir="$TF_DIR" apply -input=false -auto-approve \
+            -var "app_version=${{ steps.version.outputs.version }}" -var allow_destroy=true \
+            -target=module.stack.module.alb -target=module.stack.module.database
+
+      - name: Destroy plan
+        if: steps.state.outputs.resources != '0'
+        run: |
+          terraform -chdir="$TF_DIR" plan -destroy -input=false \
+            -var "app_version=${{ steps.version.outputs.version }}" -var allow_destroy=true -out=destroy.tfplan
+          {
+            echo "### Destroy plan: ${STACK}"
+            echo '```'
+            terraform -chdir="$TF_DIR" show -no-color destroy.tfplan | tail -c 60000
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: terraform destroy
+        if: steps.state.outputs.resources != '0'
+        run: terraform -chdir="$TF_DIR" apply -input=false destroy.tfplan
+
+      - name: Summary
+        if: always() && steps.state.outputs.resources != '0'
+        env:
+          STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### ${STACK}: destroy ${STATUS}"
+            if [ "${STATUS}" = "success" ]; then
+              echo "- Removed: network, load balancers, compute, database, alarms and logs of ${STACK}."
+              echo "- Kept: ECR images and AMIs (to redeploy), the state bucket and CI roles."
+              if [ "${{ inputs.environment }}" = "prod" ]; then
+                echo "- Final database snapshot: \`${PROJECT}-prod-final\` (delete it in the RDS console when you no longer need it)."
+              fi
+              echo "- To recreate it, run the ${{ inputs.platform == 'ecs' && 'Deploy ECS' || 'Deploy EC2' }} workflow."
+            else
+              echo "Some resources may remain. Fix the error above and run Destroy again: it only removes what is left."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

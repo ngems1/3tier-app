@@ -1,0 +1,277 @@
+# Continuous integration: runs on every pull request, and deploy-ec2.yml and
+# deploy-ecs.yml call it on every push to main, so nothing is released without
+# passing it.
+#
+# Stages (project plan section 4, "Pull Request" and "Security"):
+#   backend    lint (ruff), unit tests (pytest), dependency audit (pip-audit)
+#   frontend   lint (eslint), unit tests (jest), build, dependency audit (npm audit)
+#   terraform  fmt, validate (every root), offline tests with a mocked provider
+#   packer     fmt and validate of the AMI templates
+#   security   Checkov (IaC), Trivy filesystem scan, Docker builds + Trivy image scans
+#   codeql     code-quality and security analysis (Python + JavaScript)
+#   plan       pull requests only: read-only Terraform plan against every
+#              deployed environment (EC2 dev/prod, ECS dev/prod)
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  TF_VERSION: "1.16.4"
+  PACKER_VERSION: "1.16.1"
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "22"
+
+jobs:
+  backend:
+    name: Backend (FastAPI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: app/backend/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r app/backend/requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Unit tests (pytest)
+        run: pytest
+
+      - name: Dependency audit (pip-audit)
+        run: pip-audit --strict -r app/backend/requirements.txt
+
+  frontend:
+    name: Frontend (React)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: app/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Unit tests (jest)
+        run: npm run test:ci
+
+      - name: Build
+        run: npm run build
+
+      # Runtime dependencies ship to users; build tooling (react-scripts) does not.
+      - name: Dependency audit (runtime dependencies)
+        run: npm audit --omit=dev --audit-level=high
+
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Format
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: Validate every root module
+        run: |
+          for dir in infra/terraform/state-bucket infra/terraform/bootstrap infra/terraform/environments/*/; do
+            echo "::group::validate ${dir}"
+            terraform -chdir="${dir}" init -backend=false -input=false
+            terraform -chdir="${dir}" validate
+            echo "::endgroup::"
+          done
+
+      - name: Offline stack tests (mocked AWS provider)
+        run: |
+          for stack in app-stack ecs-stack; do
+            echo "::group::test ${stack}"
+            terraform -chdir="infra/terraform/modules/${stack}" init -input=false
+            terraform -chdir="infra/terraform/modules/${stack}" test
+            echo "::endgroup::"
+          done
+
+  packer:
+    name: Packer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-packer@v3
+        with:
+          version: ${{ env.PACKER_VERSION }}
+
+      - name: Format
+        run: packer fmt -check -recursive deploy/ec2/packer
+
+      - name: Validate
+        run: |
+          # The web image copies the React build; validation only needs the path to exist.
+          mkdir -p app/frontend/build && touch app/frontend/build/index.html
+          packer init deploy/ec2/packer
+          packer validate -var "app_version=${GITHUB_SHA}" deploy/ec2/packer
+
+  security:
+    name: Security scans
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Checkov (Terraform)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra/terraform
+          framework: terraform
+          quiet: true
+          soft_fail: false
+
+      - name: Trivy filesystem scan (dependencies, secrets, misconfigurations)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          skip-dirs: infra/terraform
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Build backend image
+        run: docker build --build-arg "APP_VERSION=${GITHUB_SHA}" -t "cloudbatch818-three-tier-backend:${GITHUB_SHA}" app/backend
+
+      - name: Build frontend image
+        run: docker build --build-arg "APP_VERSION=${GITHUB_SHA}" -t "cloudbatch818-three-tier-frontend:${GITHUB_SHA}" app/frontend
+
+      - name: Trivy backend image scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: cloudbatch818-three-tier-backend:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Trivy frontend image scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: cloudbatch818-three-tier-frontend:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
+
+  plan:
+    name: Terraform plan (${{ matrix.stack }}, read-only)
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.AWS_PLAN_ROLE_ARN != ''
+    needs: [terraform]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - stack: dev
+            project: cloudbatch818-three-tier
+            environment: dev
+          - stack: prod
+            project: cloudbatch818-three-tier
+            environment: prod
+          - stack: ecs-dev
+            project: cloudbatch818-three-tier-ecs
+            environment: dev
+          - stack: ecs-prod
+            project: cloudbatch818-three-tier-ecs
+            environment: prod
+    env:
+      TF_DIR: infra/terraform/environments/${{ matrix.stack }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      # Plan infrastructure changes against the release that is currently
+      # deployed, so the plan shows only what this pull request changes.
+      - name: Look up deployed version
+        id: deployed
+        run: |
+          version=$(aws ssm get-parameter --name "/${{ matrix.project }}/${{ matrix.environment }}/deployed-version" \
+            --query Parameter.Value --output text 2>/dev/null || true)
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          [ -n "${version}" ] || echo "::notice::${{ matrix.stack }} has not been deployed yet; skipping plan."
+
+      - name: Terraform plan
+        if: steps.deployed.outputs.version != ''
+        run: |
+          terraform -chdir="$TF_DIR" init -input=false
+          terraform -chdir="$TF_DIR" plan -input=false -lock=false -no-color \
+            -var "app_version=${{ steps.deployed.outputs.version }}" | tee plan.txt
+          {
+            echo "### Terraform plan: ${{ matrix.stack }}"
+            echo '```'
+            tail -c 60000 plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

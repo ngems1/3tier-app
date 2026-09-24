@@ -1,0 +1,243 @@
+# Release and deployment for the EC2 project (Project 1).
+#
+# Where pushes to main go is set by the GitHub variable DEPLOY_TARGET:
+#   ec2 (default) -> this workflow deploys; ecs -> deploy-ecs.yml; both -> both.
+# A manual run always deploys to EC2, whatever DEPLOY_TARGET says.
+#
+# Push to main:
+#   CI -> build release (artifacts + AMIs tagged with the commit SHA)
+#      -> build, push and scan container images in ECR (same SHA tag)
+#      -> plan dev -> apply dev -> smoke test
+#      -> plan prod -> [GitHub Environment approval] -> apply prod -> smoke test
+#
+# Manual run (Actions > Deploy EC2 > Run workflow):
+#   * environment + no version : build the selected ref and deploy it there
+#   * environment + version    : deploy an existing release (rollback/redeploy);
+#                                nothing is rebuilt, the release's AMIs are reused
+#
+# AWS access uses GitHub OIDC with separate roles per stage (see
+# infra/terraform/bootstrap): read-only for plans, build for Packer, and one
+# deploy role per GitHub Environment. No AWS keys are stored in GitHub.
+
+name: Deploy EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        type: choice
+        options: [dev, prod]
+        required: true
+        default: dev
+      version:
+        description: Existing release (commit SHA) to deploy or roll back to. Leave empty to build the selected ref.
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# One deployment at a time; never cancel a running apply.
+concurrency:
+  group: deploy-ec2
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.16.4"
+  PACKER_VERSION: "1.16.1"
+  NODE_VERSION: "22"
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  VERSION: ${{ inputs.version || github.sha }}
+
+jobs:
+  target:
+    name: Deploy target
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.check.outputs.deploy }}
+    steps:
+      - id: check
+        env:
+          TARGET: ${{ vars.DEPLOY_TARGET || 'ec2' }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          case "$TARGET" in
+            ec2|ecs|both) ;;
+            *) echo "::error::DEPLOY_TARGET must be ec2, ecs or both (it is '$TARGET')"; exit 1 ;;
+          esac
+          if [ "$EVENT" = "workflow_dispatch" ] || [ "$TARGET" = "ec2" ] || [ "$TARGET" = "both" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::DEPLOY_TARGET is '$TARGET', so pushes to main don't deploy to EC2. Run this workflow manually to deploy to EC2 anyway."
+            echo "EC2 deployment skipped: DEPLOY_TARGET is \`$TARGET\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  ci:
+    name: CI
+    needs: [target]
+    if: needs.target.outputs.deploy == 'true' && inputs.version == ''
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+      id-token: write
+
+  release:
+    name: Build release ${{ github.sha }}
+    needs: [ci]
+    if: inputs.version == ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: app/frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: app/frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Package versioned artifacts
+        run: |
+          mkdir -p dist
+          tar -czf "dist/backend-${VERSION}.tar.gz" -C app/backend app requirements.txt
+          tar -czf "dist/frontend-${VERSION}.tar.gz" -C app/frontend/build .
+          (cd dist && sha256sum ./*.tar.gz > SHA256SUMS)
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ env.VERSION }}
+          path: dist/
+          retention-days: 90
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_BUILD_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Publish artifacts to S3 (immutable, per version)
+        run: aws s3 cp dist/ "s3://${{ vars.ARTIFACT_BUCKET }}/releases/${VERSION}/" --recursive
+
+      - uses: hashicorp/setup-packer@v3
+        with:
+          version: ${{ env.PACKER_VERSION }}
+
+      - name: Bake AMIs (skipped if this version already exists)
+        run: |
+          count=$(aws ec2 describe-images --owners self \
+            --filters "Name=tag:Project,Values=cloudbatch818-three-tier" "Name=tag:Version,Values=${VERSION}" "Name=state,Values=available" \
+            --query 'length(Images)' --output text)
+          if [ "${count}" -ge 2 ]; then
+            echo "AMIs for ${VERSION} already exist; nothing to bake."
+            exit 0
+          fi
+          packer init deploy/ec2/packer
+          packer build -color=false -var "app_version=${VERSION}" -var "aws_region=${AWS_REGION}" deploy/ec2/packer
+
+      - name: Summary
+        run: |
+          {
+            echo "### Release ${VERSION}"
+            echo "- Artifacts: \`s3://${{ vars.ARTIFACT_BUCKET }}/releases/${VERSION}/\`"
+            echo "- AMIs tagged \`Version=${VERSION}\` (web + app)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  images:
+    name: Container images
+    needs: [ci]
+    if: inputs.version == ''
+    uses: ./.github/workflows/reusable-images.yml
+    with:
+      version: ${{ github.sha }}
+    permissions:
+      contents: read
+      id-token: write
+
+  # ---------------------------------------------------------------------------
+  # dev
+  # ---------------------------------------------------------------------------
+
+  plan-dev:
+    name: Plan dev
+    needs: [release, images]
+    if: >-
+      always() &&
+      (github.event_name == 'push' || inputs.environment == 'dev') &&
+      ((needs.release.result == 'success' && needs.images.result == 'success') ||
+        (needs.release.result == 'skipped' && inputs.version != ''))
+    uses: ./.github/workflows/reusable-terraform-plan.yml
+    with:
+      platform: ec2
+      environment: dev
+      version: ${{ inputs.version || github.sha }}
+    permissions:
+      contents: read
+      id-token: write
+
+  apply-dev:
+    name: Apply dev
+    needs: [plan-dev]
+    # Explicit condition: jobs further up (CI, build) are skipped on rollbacks
+    # and manual prod runs, which would otherwise skip this job too.
+    if: ${{ !cancelled() && needs.plan-dev.result == 'success' }}
+    uses: ./.github/workflows/reusable-terraform-apply.yml
+    with:
+      platform: ec2
+      environment: dev
+      version: ${{ inputs.version || github.sha }}
+    permissions:
+      contents: read
+      id-token: write
+
+  # ---------------------------------------------------------------------------
+  # prod (promotion requires approval on the "prod" GitHub Environment)
+  # ---------------------------------------------------------------------------
+
+  plan-prod:
+    name: Plan prod
+    needs: [release, images, apply-dev]
+    if: >-
+      always() &&
+      (
+        (github.event_name == 'push' && needs.apply-dev.result == 'success') ||
+        (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod' &&
+          ((needs.release.result == 'success' && needs.images.result == 'success') ||
+            (needs.release.result == 'skipped' && inputs.version != '')))
+      )
+    uses: ./.github/workflows/reusable-terraform-plan.yml
+    with:
+      platform: ec2
+      environment: prod
+      version: ${{ inputs.version || github.sha }}
+    permissions:
+      contents: read
+      id-token: write
+
+  apply-prod:
+    name: Apply prod
+    needs: [plan-prod]
+    # Explicit condition: jobs further up (CI, build) are skipped on rollbacks
+    # and manual prod runs, which would otherwise skip this job too.
+    if: ${{ !cancelled() && needs.plan-prod.result == 'success' }}
+    uses: ./.github/workflows/reusable-terraform-apply.yml
+    with:
+      platform: ec2
+      environment: prod
+      version: ${{ inputs.version || github.sha }}
+    permissions:
+      contents: read
+      id-token: write

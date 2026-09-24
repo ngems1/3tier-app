@@ -1,0 +1,52 @@
+# Full stack on your machine, no AWS account needed:
+#   docker compose up --build
+#   frontend  http://localhost:8080
+#   API       http://localhost:8000/api/tasks   (docs: http://localhost:8000/docs)
+# Credentials below are for local development only.
+
+services:
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: webappdb
+      MYSQL_USER: ${MYSQL_USER:-app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-local-dev-only}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-local-dev-root}
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  backend:
+    build:
+      context: ./app/backend
+      args:
+        APP_VERSION: local
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: webappdb
+      DB_USER: ${MYSQL_USER:-app}
+      DB_PASSWORD: ${MYSQL_PASSWORD:-local-dev-only}
+      APP_VERSION: local
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./app/frontend
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend
+
+volumes:
+  db_data:

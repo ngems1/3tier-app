@@ -1,0 +1,6 @@
+# Runtime dependencies (pinned for reproducible, immutable releases)
+fastapi==0.141.1
+pydantic==2.13.5
+uvicorn==0.53.0
+PyMySQL==1.2.3
+boto3==1.43.101

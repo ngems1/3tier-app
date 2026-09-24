@@ -1,0 +1,21 @@
+#!/bin/bash
+# App tier boot configuration. The AMI already contains the release
+# (code + pinned dependencies); this only writes runtime settings.
+set -euo pipefail
+
+install -d -m 0750 -o root -g threetier /etc/three-tier
+cat > /etc/three-tier/backend.env <<ENV
+APP_VERSION=${app_version}
+AWS_REGION=${region}
+DB_HOST=${db_host}
+DB_PORT=${db_port}
+DB_NAME=${db_name}
+DB_SECRET_ARN=${db_secret_arn}
+DB_SSL_CA=/etc/pki/rds/global-bundle.pem
+ENV
+chown root:threetier /etc/three-tier/backend.env
+chmod 0640 /etc/three-tier/backend.env
+
+/opt/three-tier/bin/configure-cloudwatch.sh "${cw_agent_cfg}" "${metrics_ns}" "${app_log_grp}"
+
+systemctl enable --now three-tier-backend.service

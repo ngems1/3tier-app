@@ -1,0 +1,5 @@
+[project]
+name = "tasks-api"
+version = "1.0.0"
+description = "FastAPI backend for the 3-tier tasks application"
+requires-python = ">=3.11"

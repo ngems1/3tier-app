@@ -1,0 +1,7 @@
+# Keep LF line endings in the repository and on checkout. Shell scripts,
+# systemd units and Nginx configs are copied onto Linux instances and break
+# with Windows (CRLF) line endings.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

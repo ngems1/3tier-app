@@ -1,0 +1,65 @@
+.tasks {
+  color: white;
+  width: min(960px, 92vw);
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.task-create,
+.task-edit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+.task-create input,
+.task-edit input,
+.tasks select {
+  padding: 0.4rem;
+  border-radius: 4px;
+  border: 1px solid rgb(9, 81, 187);
+}
+
+.tasks button {
+  padding: 0.4rem 0.8rem;
+  border-radius: 4px;
+  border: none;
+  background: rgb(9, 81, 187);
+  color: white;
+  cursor: pointer;
+}
+
+.tasks button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.task-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.task-table th,
+.task-table td {
+  border: 1px solid rgb(9, 81, 187);
+  padding: 8px;
+  text-align: left;
+}
+
+.task-table tr:nth-child(even) {
+  background-color: #0a0128;
+}
+
+.task-actions {
+  white-space: nowrap;
+}
+
+.task-actions button + button {
+  margin-left: 0.4rem;
+}
+
+.task-error {
+  color: #ff8a80;
+}

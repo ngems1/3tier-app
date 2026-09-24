@@ -1,0 +1,32 @@
+[Unit]
+Description=Three-tier Tasks API (FastAPI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=threetier
+Group=threetier
+EnvironmentFile=/etc/three-tier/backend.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+WorkingDirectory=/opt/three-tier/backend
+ExecStart=/opt/three-tier/backend/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2 --proxy-headers --forwarded-allow-ips=*
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/three-tier/backend.log
+StandardError=append:/var/log/three-tier/backend.log
+
+# Sandboxing
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+ReadWritePaths=/var/log/three-tier
+
+[Install]
+WantedBy=multi-user.target

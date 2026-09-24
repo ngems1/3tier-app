@@ -1,0 +1,124 @@
+# Called by deploy-ec2.yml and deploy-ecs.yml. Applies the saved plan for one
+# environment of one platform with that environment's deploy role, waits for
+# the rollout to finish, and runs the smoke tests.
+#
+# The job runs in the matching GitHub Environment (dev or prod) for both
+# platforms, so the same protection rules (required reviewers on prod) and
+# deploy roles apply to EC2 and ECS, and GitHub records the deployment history.
+
+name: Terraform apply (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: ec2 or ecs
+        type: string
+        required: true
+      environment:
+        type: string
+        required: true
+      version:
+        description: Release (commit SHA) being deployed
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_VERSION: "1.16.4"
+  TF_DIR: infra/terraform/environments/${{ inputs.platform == 'ecs' && 'ecs-' || '' }}${{ inputs.environment }}
+  # SSM parameter written by Terraform with the release currently deployed.
+  VERSION_PARAMETER: /cloudbatch818-three-tier${{ inputs.platform == 'ecs' && '-ecs' || '' }}/${{ inputs.environment }}/deployed-version
+  WORKFLOW_NAME: ${{ inputs.platform == 'ecs' && 'Deploy ECS' || 'Deploy EC2' }}
+
+jobs:
+  apply:
+    name: terraform apply (${{ inputs.platform }} ${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.outputs.outputs.app_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          # A first deploy (RDS Multi-AZ) plus the rollout wait can exceed an hour.
+          role-duration-seconds: 7200
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Record the currently deployed version (rollback target)
+        id: previous
+        run: |
+          previous=$(aws ssm get-parameter --name "$VERSION_PARAMETER" \
+            --query Parameter.Value --output text 2>/dev/null || echo "none")
+          echo "version=${previous}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tfplan-${{ inputs.platform }}-${{ inputs.environment }}-${{ github.run_id }}
+          path: ${{ env.TF_DIR }}
+
+      - name: terraform apply (saved plan)
+        run: |
+          terraform -chdir="$TF_DIR" init -input=false
+          terraform -chdir="$TF_DIR" apply -input=false tfplan
+
+      - name: Read outputs
+        id: outputs
+        run: echo "app_url=$(terraform -chdir="$TF_DIR" output -raw app_url)" >> "$GITHUB_OUTPUT"
+
+      # Scripts run through bash so they work even if the executable bit was
+      # lost (for example when the repository was copied on Windows).
+
+      # EC2: rolling instance refresh of both Auto Scaling groups (the refresh
+      # rolls back by itself if new instances fail their health checks).
+      - name: Wait for rolling instance refresh (EC2)
+        if: inputs.platform == 'ec2'
+        run: |
+          bash deploy/ec2/wait-for-refresh.sh \
+            "$(terraform -chdir="$TF_DIR" output -raw app_asg_name)" \
+            "$(terraform -chdir="$TF_DIR" output -raw web_asg_name)"
+
+      # ECS: rolling service deployment (the deployment circuit breaker rolls
+      # back by itself if new tasks keep failing).
+      - name: Wait for the service deployments (ECS)
+        if: inputs.platform == 'ecs'
+        run: bash deploy/ecs/verify-deployment.sh "$TF_DIR"
+
+      - name: Smoke tests
+        run: bash tests/smoke/smoke_test.sh "${{ steps.outputs.outputs.app_url }}" "${{ inputs.version }}"
+
+      # Only now is the release known to be good: record it as the deployed
+      # version (the rollback target for the next deploy).
+      - name: Record the deployed version
+        run: |
+          aws ssm put-parameter --name "$VERSION_PARAMETER" --type String --overwrite \
+            --value "${{ inputs.version }}" >/dev/null
+          echo "Recorded ${{ inputs.version }} in $VERSION_PARAMETER"
+
+      - name: Deployment summary
+        if: always()
+        env:
+          PREVIOUS: ${{ steps.previous.outputs.version }}
+          STATUS: ${{ job.status }}
+        run: |
+          {
+            echo "### ${{ inputs.platform }} ${{ inputs.environment }}: ${STATUS}"
+            echo "- Release: \`${{ inputs.version }}\`"
+            echo "- Previous release: \`${PREVIOUS}\`"
+            echo "- URL: ${{ steps.outputs.outputs.app_url }}"
+            if [ "${STATUS}" != "success" ] && [ -n "${PREVIOUS}" ] && [ "${PREVIOUS}" != "none" ]; then
+              echo ""
+              echo "**Roll back:** Actions > ${WORKFLOW_NAME} > Run workflow with environment \`${{ inputs.environment }}\` and version \`${PREVIOUS}\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

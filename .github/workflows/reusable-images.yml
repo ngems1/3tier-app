@@ -1,0 +1,82 @@
+# Called by deploy-ec2.yml and deploy-ecs.yml. Builds the frontend and backend
+# container images for one commit, pushes them to ECR tagged with the commit
+# SHA, and blocks the release if ECR's scan finds CRITICAL vulnerabilities.
+# Tags are immutable: a SHA that was already pushed is reused, never rebuilt,
+# so EC2 and ECS deployments of the same commit always use identical images.
+
+name: Container images (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Commit SHA to build and tag
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  VERSION: ${{ inputs.version }}
+
+jobs:
+  image:
+    name: Image ${{ matrix.image }} -> ECR
+    runs-on: ubuntu-latest
+    # When both deploy workflows run for the same commit, the second one waits
+    # and then finds the image already pushed.
+    concurrency:
+      group: image-${{ matrix.image }}-${{ inputs.version }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [frontend, backend]
+    env:
+      REPOSITORY: cloudbatch818-three-tier-${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.version }}
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_BUILD_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push ${{ env.REPOSITORY }}:${{ env.VERSION }}
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          if aws ecr describe-images --repository-name "${REPOSITORY}" --image-ids "imageTag=${VERSION}" >/dev/null 2>&1; then
+            echo "${REPOSITORY}:${VERSION} already exists; skipping build."
+            exit 0
+          fi
+          image="${REGISTRY}/${REPOSITORY}:${VERSION}"
+          docker build --build-arg "APP_VERSION=${VERSION}" -t "${image}" "app/${{ matrix.image }}"
+          docker push "${image}"
+
+      # ECR scans every pushed image: block the release on CRITICAL findings
+      # and report HIGH ones in the run summary.
+      - name: ECR scan gate
+        run: |
+          aws ecr wait image-scan-complete --repository-name "${REPOSITORY}" --image-id "imageTag=${VERSION}"
+          counts=$(aws ecr describe-image-scan-findings --repository-name "${REPOSITORY}" --image-id "imageTag=${VERSION}" \
+            --query 'imageScanFindings.findingSeverityCounts' --output json)
+          critical=$(jq -r '.CRITICAL // 0' <<<"${counts}")
+          high=$(jq -r '.HIGH // 0' <<<"${counts}")
+          {
+            echo "### ${REPOSITORY}:${VERSION}"
+            echo "- ECR scan: CRITICAL=${critical}, HIGH=${high}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${critical}" -gt 0 ]; then
+            echo "::error::${REPOSITORY}:${VERSION} has ${critical} CRITICAL vulnerabilities"
+            exit 1
+          fi

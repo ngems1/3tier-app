@@ -1,0 +1,14 @@
+line-length = 120
+target-version = "py311"
+include = ["app/backend/**/*.py", "tests/backend/**/*.py"]
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "BLE"]
+
+[lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+# Column names in these f-strings come from a fixed allowlist, never user input.
+"app/backend/app/repository.py" = ["S608"]
+
+[lint.isort]
+known-first-party = ["app"]

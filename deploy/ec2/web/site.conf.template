@@ -1,0 +1,49 @@
+# Rendered at boot by render-nginx.sh. Only ${APP_ALB_DNS} is substituted.
+server {
+    listen 80 default_server;
+    server_name _;
+    root /usr/share/nginx/three-tier;
+
+    # ALB target group health check
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # API -> internal app ALB. The ALB's IPs change over time, so resolve the
+    # name through the VPC resolver at request time instead of only at startup.
+    location /api/ {
+        resolver 169.254.169.253 valid=30s ipv6=off;
+        set $app_alb "${APP_ALB_DNS}";
+        proxy_pass http://$app_alb;
+        proxy_set_header Host $host;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 30s;
+    }
+
+    # Fingerprinted build assets can be cached forever.
+    # (add_header in a location replaces inherited headers, so the security
+    # headers are repeated in each location that sets its own.)
+    location /static/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    }
+
+    # React single-page app
+    location / {
+        try_files $uri /index.html;
+        add_header Cache-Control "no-cache";
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    }
+}
