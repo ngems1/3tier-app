@@ -69,7 +69,7 @@ test('deletes a task', async () => {
     .mockReturnValueOnce(jsonResponse([task()]))
     .mockReturnValueOnce(Promise.resolve({ ok: true, status: 204, statusText: 'No Content' }));
   render(<Tasks />);
-  const row = (await screen.findByText('Write runbook')).closest('tr');
+  const row = await screen.findByRole('row', { name: /write runbook/i });
 
   fireEvent.click(within(row).getByRole('button', { name: 'Delete' }));
 
