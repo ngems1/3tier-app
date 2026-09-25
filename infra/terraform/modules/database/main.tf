@@ -47,6 +47,9 @@ resource "aws_iam_role_policy_attachment" "monitoring" {
 }
 
 resource "aws_db_instance" "this" {
+  #checkov:skip=CKV_AWS_293:Deletion protection is set per environment: on in prod (deletion_protection = true), off in dev so the Destroy workflow can remove it.
+  #checkov:skip=CKV_AWS_353:Performance Insights is set per environment (db_performance_insights_enabled): on in prod, off in dev to save cost.
+  #checkov:skip=CKV_AWS_354:When Performance Insights is on it is encrypted with the environment KMS key (performance_insights_kms_key_id).
   identifier     = var.name
   engine         = "mysql"
   engine_version = var.engine_version

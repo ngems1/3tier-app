@@ -121,6 +121,7 @@ resource "aws_s3_bucket_policy" "logs" {
 # ---------------------------------------------------------------------------
 
 resource "aws_lb" "this" {
+  #checkov:skip=CKV_AWS_150:Deletion protection is set per environment: on in prod (deletion_protection = true), off in dev so the Destroy workflow can remove it.
   #checkov:skip=CKV2_AWS_20:HTTP redirects to HTTPS whenever a domain is configured (enable_https); without one, HTTP-only is a temporary mode.
   name                       = var.short_name
   internal                   = false

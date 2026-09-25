@@ -75,6 +75,7 @@ resource "aws_vpc_security_group_egress_rule" "alb_to_web" {
 # --- Web tier ----------------------------------------------------------------
 
 resource "aws_vpc_security_group_ingress_rule" "web_from_alb" {
+  #checkov:skip=CKV_AWS_260:The source is the public ALB security group, not 0.0.0.0/0; web instances are never reachable from the internet directly.
   security_group_id            = aws_security_group.web.id
   description                  = "HTTP from the public ALB"
   referenced_security_group_id = aws_security_group.alb_public.id
@@ -104,6 +105,7 @@ resource "aws_vpc_security_group_egress_rule" "web_https_out" {
 # --- Internal app ALB --------------------------------------------------------
 
 resource "aws_vpc_security_group_ingress_rule" "app_alb_from_web" {
+  #checkov:skip=CKV_AWS_260:The source is the web tier security group, not 0.0.0.0/0; this internal ALB is never reachable from the internet.
   security_group_id            = aws_security_group.app_alb.id
   description                  = "HTTP from the web tier"
   referenced_security_group_id = aws_security_group.web.id

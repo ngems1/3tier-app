@@ -120,6 +120,7 @@ resource "aws_s3_bucket_policy" "logs" {
 # ---------------------------------------------------------------------------
 
 resource "aws_lb" "web" {
+  #checkov:skip=CKV_AWS_150:Deletion protection is set per environment: on in prod (deletion_protection = true), off in dev so the Destroy workflow can remove it.
   #checkov:skip=CKV2_AWS_20:HTTP redirects to HTTPS whenever a domain is configured (enable_https); without one, HTTP-only is a temporary mode.
   name                       = "${var.short_name}-web"
   internal                   = false
@@ -140,6 +141,7 @@ resource "aws_lb" "web" {
 }
 
 resource "aws_lb_target_group" "web" {
+  #checkov:skip=CKV_AWS_378:TLS terminates at the public ALB; traffic to the web instances stays inside the VPC on private subnets.
   name                 = "${var.short_name}-web"
   port                 = 80
   protocol             = "HTTP"
@@ -274,6 +276,7 @@ resource "aws_wafv2_web_acl_logging_configuration" "web" {
 # ---------------------------------------------------------------------------
 
 resource "aws_lb" "app" {
+  #checkov:skip=CKV_AWS_150:Deletion protection is set per environment: on in prod (deletion_protection = true), off in dev so the Destroy workflow can remove it.
   #checkov:skip=CKV2_AWS_20:Internal-only ALB reached from the web tier inside the VPC; TLS terminates at the public edge.
   #checkov:skip=CKV2_AWS_28:Internal-only ALB, not reachable from the internet; WAF protects the public entry point.
   name                       = "${var.short_name}-app"
