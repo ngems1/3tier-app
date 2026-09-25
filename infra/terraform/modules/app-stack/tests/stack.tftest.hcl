@@ -111,6 +111,12 @@ mock_provider "aws" {
   mock_resource "aws_acm_certificate" {
     defaults = {
       arn = "arn:aws:acm:us-east-1:123456789012:certificate/mock"
+      domain_validation_options = [{
+        domain_name           = "test.example.com"
+        resource_record_name  = "_0123456789abcdef.test.example.com."
+        resource_record_type  = "CNAME"
+        resource_record_value = "_fedcba9876543210.acm-validations.aws."
+      }]
     }
   }
 
