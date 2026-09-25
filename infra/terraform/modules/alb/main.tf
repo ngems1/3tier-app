@@ -120,6 +120,7 @@ resource "aws_s3_bucket_policy" "logs" {
 # ---------------------------------------------------------------------------
 
 resource "aws_lb" "web" {
+  #checkov:skip=CKV2_AWS_76:The attached WAF web ACL (aws_wafv2_web_acl.web in this module) includes AWSManagedRulesKnownBadInputsRuleSet, which blocks the Log4j lookup; CKV_AWS_192 confirms it. This graph check does not follow the association inside the module.
   #checkov:skip=CKV_AWS_150:Deletion protection is set per environment: on in prod (deletion_protection = true), off in dev so the Destroy workflow can remove it.
   #checkov:skip=CKV2_AWS_20:HTTP redirects to HTTPS whenever a domain is configured (enable_https); without one, HTTP-only is a temporary mode.
   name                       = "${var.short_name}-web"
