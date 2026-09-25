@@ -1,9 +1,17 @@
 output "vpc_id" {
-  value = aws_vpc.this.id
+  value = local.vpc_id
 }
 
 output "vpc_cidr_block" {
-  value = aws_vpc.this.cidr_block
+  value = local.vpc_cidr_block
+}
+
+output "uses_existing_vpc" {
+  value = !local.create_vpc
+}
+
+output "flow_log_count" {
+  value = length(aws_flow_log.this) + length(aws_flow_log.subnets)
 }
 
 output "public_subnet_ids" {

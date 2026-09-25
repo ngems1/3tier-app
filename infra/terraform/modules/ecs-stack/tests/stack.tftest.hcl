@@ -3,6 +3,18 @@
 # the wiring and the controls Project 2 relies on.
 
 mock_provider "aws" {
+  mock_data "aws_vpc" {
+    defaults = {
+      cidr_block = "172.31.0.0/16"
+    }
+  }
+
+  mock_data "aws_internet_gateway" {
+    defaults = {
+      internet_gateway_id = "igw-0123456789abcdef0"
+    }
+  }
+
   mock_data "aws_availability_zones" {
     defaults = {
       names = ["us-east-1a", "us-east-1b", "us-east-1c"]
@@ -311,5 +323,32 @@ run "destroy_workflow_unlocks_protection" {
   assert {
     condition     = !local.protect
     error_message = "allow_destroy must turn deletion protection off so the Destroy workflow can remove the stack"
+  }
+}
+
+run "creates_its_own_vpc_by_default" {
+  command = plan
+
+  assert {
+    condition     = !module.network.uses_existing_vpc
+    error_message = "Without existing_vpc_id the stack must create its own VPC"
+  }
+}
+
+run "can_use_an_existing_vpc" {
+  command = apply
+
+  variables {
+    existing_vpc_id = "vpc-0e13ae6de03f62cd5"
+  }
+
+  assert {
+    condition     = module.network.uses_existing_vpc && module.network.vpc_id == "vpc-0e13ae6de03f62cd5"
+    error_message = "With existing_vpc_id the stack must use that VPC"
+  }
+
+  assert {
+    condition     = module.network.flow_log_count == 12
+    error_message = "In a shared VPC each of the stack's 12 subnets must have a flow log"
   }
 }

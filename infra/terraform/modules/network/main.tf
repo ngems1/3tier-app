@@ -1,5 +1,11 @@
-# Multi-AZ VPC: public subnets (ALB + NAT), private web and app subnets
+# Multi-AZ network: public subnets (ALB + NAT), private web and app subnets
 # (egress through NAT), and isolated database subnets (no internet route).
+#
+# By default it creates its own VPC. When existing_vpc_id is set (for example
+# because the account has reached its VPC quota), it builds the same subnets,
+# NAT gateway, route tables and flow logs inside that VPC instead and reuses
+# its internet gateway. The existing VPC, its internet gateway, its default
+# security group and its other subnets are never modified or deleted.
 
 data "aws_availability_zones" "available" {
   #checkov:skip=CKV_AWS_394:Subnets use a fixed slice of the zone list (one per subnet CIDR), so a new AWS zone never changes the layout; excluded_zone_ids pins out unsupported zones.
@@ -8,11 +14,17 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
-  azs       = slice(data.aws_availability_zones.available.names, 0, length(var.public_subnet_cidrs))
-  nat_count = var.single_nat_gateway ? 1 : length(local.azs)
+  azs        = slice(data.aws_availability_zones.available.names, 0, length(var.public_subnet_cidrs))
+  nat_count  = var.single_nat_gateway ? 1 : length(local.azs)
+  create_vpc = var.existing_vpc_id == ""
+
+  vpc_id              = local.create_vpc ? aws_vpc.this[0].id : data.aws_vpc.existing[0].id
+  vpc_cidr_block      = local.create_vpc ? aws_vpc.this[0].cidr_block : data.aws_vpc.existing[0].cidr_block
+  internet_gateway_id = local.create_vpc ? aws_internet_gateway.this[0].id : data.aws_internet_gateway.existing[0].internet_gateway_id
 }
 
 resource "aws_vpc" "this" {
+  count                = local.create_vpc ? 1 : 0
   cidr_block           = var.cidr_block
   enable_dns_support   = true
   enable_dns_hostnames = true
@@ -20,10 +32,27 @@ resource "aws_vpc" "this" {
   tags = { Name = var.name }
 }
 
+data "aws_vpc" "existing" {
+  count = local.create_vpc ? 0 : 1
+  id    = var.existing_vpc_id
+}
+
 # Lock down the default security group so nothing can use it by accident.
+# Only in a VPC this module owns: in a shared VPC other workloads may rely on it.
 resource "aws_default_security_group" "default" {
-  vpc_id = aws_vpc.this.id
+  count  = local.create_vpc ? 1 : 0
+  vpc_id = aws_vpc.this[0].id
   tags   = { Name = "${var.name}-default-deny" }
+}
+
+moved {
+  from = aws_vpc.this
+  to   = aws_vpc.this[0]
+}
+
+moved {
+  from = aws_default_security_group.default
+  to   = aws_default_security_group.default[0]
 }
 
 # ---------------------------------------------------------------------------
@@ -32,7 +61,7 @@ resource "aws_default_security_group" "default" {
 
 resource "aws_subnet" "public" {
   count                   = length(local.azs)
-  vpc_id                  = aws_vpc.this.id
+  vpc_id                  = local.vpc_id
   cidr_block              = var.public_subnet_cidrs[count.index]
   availability_zone       = local.azs[count.index]
   map_public_ip_on_launch = false
@@ -42,7 +71,7 @@ resource "aws_subnet" "public" {
 
 resource "aws_subnet" "web" {
   count             = length(local.azs)
-  vpc_id            = aws_vpc.this.id
+  vpc_id            = local.vpc_id
   cidr_block        = var.web_subnet_cidrs[count.index]
   availability_zone = local.azs[count.index]
 
@@ -51,7 +80,7 @@ resource "aws_subnet" "web" {
 
 resource "aws_subnet" "app" {
   count             = length(local.azs)
-  vpc_id            = aws_vpc.this.id
+  vpc_id            = local.vpc_id
   cidr_block        = var.app_subnet_cidrs[count.index]
   availability_zone = local.azs[count.index]
 
@@ -60,7 +89,7 @@ resource "aws_subnet" "app" {
 
 resource "aws_subnet" "db" {
   count             = length(local.azs)
-  vpc_id            = aws_vpc.this.id
+  vpc_id            = local.vpc_id
   cidr_block        = var.db_subnet_cidrs[count.index]
   availability_zone = local.azs[count.index]
 
@@ -72,8 +101,23 @@ resource "aws_subnet" "db" {
 # ---------------------------------------------------------------------------
 
 resource "aws_internet_gateway" "this" {
-  vpc_id = aws_vpc.this.id
+  count  = local.create_vpc ? 1 : 0
+  vpc_id = aws_vpc.this[0].id
   tags   = { Name = var.name }
+}
+
+moved {
+  from = aws_internet_gateway.this
+  to   = aws_internet_gateway.this[0]
+}
+
+# An existing VPC must already have an internet gateway (the default VPC does).
+data "aws_internet_gateway" "existing" {
+  count = local.create_vpc ? 0 : 1
+  filter {
+    name   = "attachment.vpc-id"
+    values = [var.existing_vpc_id]
+  }
 }
 
 resource "aws_eip" "nat" {
@@ -96,14 +140,14 @@ resource "aws_nat_gateway" "this" {
 # ---------------------------------------------------------------------------
 
 resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.this.id
+  vpc_id = local.vpc_id
   tags   = { Name = "${var.name}-public" }
 }
 
 resource "aws_route" "public_internet" {
   route_table_id         = aws_route_table.public.id
   destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.this.id
+  gateway_id             = local.internet_gateway_id
 }
 
 resource "aws_route_table_association" "public" {
@@ -116,7 +160,7 @@ resource "aws_route_table_association" "public" {
 # single_nat_gateway = false (no cross-AZ dependency).
 resource "aws_route_table" "private" {
   count  = length(local.azs)
-  vpc_id = aws_vpc.this.id
+  vpc_id = local.vpc_id
   tags   = { Name = "${var.name}-private-${local.azs[count.index]}" }
 }
 
@@ -141,7 +185,7 @@ resource "aws_route_table_association" "app" {
 
 # Database subnets get a route table with only the local VPC route.
 resource "aws_route_table" "db" {
-  vpc_id = aws_vpc.this.id
+  vpc_id = local.vpc_id
   tags   = { Name = "${var.name}-db-isolated" }
 }
 
@@ -198,8 +242,25 @@ resource "aws_iam_role_policy" "flow_logs" {
   policy = data.aws_iam_policy_document.flow_logs.json
 }
 
+# Whole-VPC flow log when this module owns the VPC.
 resource "aws_flow_log" "this" {
-  vpc_id               = aws_vpc.this.id
+  count                = local.create_vpc ? 1 : 0
+  vpc_id               = aws_vpc.this[0].id
+  traffic_type         = "ALL"
+  log_destination_type = "cloud-watch-logs"
+  log_destination      = aws_cloudwatch_log_group.flow_logs.arn
+  iam_role_arn         = aws_iam_role.flow_logs.arn
+}
+
+moved {
+  from = aws_flow_log.this
+  to   = aws_flow_log.this[0]
+}
+
+# In a shared VPC, log only this stack's subnets, not other workloads' traffic.
+resource "aws_flow_log" "subnets" {
+  count                = local.create_vpc ? 0 : length(local.azs) * 4
+  subnet_id            = concat(aws_subnet.public[*].id, aws_subnet.web[*].id, aws_subnet.app[*].id, aws_subnet.db[*].id)[count.index]
   traffic_type         = "ALL"
   log_destination_type = "cloud-watch-logs"
   log_destination      = aws_cloudwatch_log_group.flow_logs.arn

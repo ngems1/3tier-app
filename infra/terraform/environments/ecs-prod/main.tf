@@ -9,11 +9,18 @@ module "stack" {
   alarm_emails  = var.alarm_emails
   allow_destroy = var.allow_destroy
 
-  vpc_cidr              = "10.81.0.0/16"
-  public_subnet_cidrs   = ["10.81.1.0/24", "10.81.2.0/24", "10.81.3.0/24"]
-  frontend_subnet_cidrs = ["10.81.4.0/24", "10.81.5.0/24", "10.81.6.0/24"]
-  backend_subnet_cidrs  = ["10.81.7.0/24", "10.81.8.0/24", "10.81.9.0/24"]
-  db_subnet_cidrs       = ["10.81.10.0/24", "10.81.11.0/24", "10.81.12.0/24"]
+  # The account has reached its VPC quota in us-east-1, so this stack is built
+  # inside the existing default VPC (172.31.0.0/16) on its own free /24 ranges.
+  # Each environment uses a separate block: dev 172.31.128-139, prod
+  # 172.31.144-155, ecs-dev 172.31.160-171, ecs-prod 172.31.176-187. To give
+  # the stack its own VPC again, delete existing_vpc_id and set a new
+  # vpc_cidr and subnet ranges (e.g. 10.x.0.0/16).
+  existing_vpc_id       = "vpc-0e13ae6de03f62cd5"
+  vpc_cidr              = "172.31.0.0/16"
+  public_subnet_cidrs   = ["172.31.176.0/24", "172.31.177.0/24", "172.31.178.0/24"]
+  frontend_subnet_cidrs = ["172.31.179.0/24", "172.31.180.0/24", "172.31.181.0/24"]
+  backend_subnet_cidrs  = ["172.31.182.0/24", "172.31.183.0/24", "172.31.184.0/24"]
+  db_subnet_cidrs       = ["172.31.185.0/24", "172.31.186.0/24", "172.31.187.0/24"]
   excluded_zone_ids     = ["use1-az3"]
   single_nat_gateway    = false
 

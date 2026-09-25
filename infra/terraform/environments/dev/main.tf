@@ -9,11 +9,18 @@ module "stack" {
   alarm_emails  = var.alarm_emails
   allow_destroy = var.allow_destroy
 
-  vpc_cidr            = "10.75.0.0/16"
-  public_subnet_cidrs = ["10.75.1.0/24", "10.75.2.0/24", "10.75.3.0/24"]
-  web_subnet_cidrs    = ["10.75.4.0/24", "10.75.5.0/24", "10.75.6.0/24"]
-  app_subnet_cidrs    = ["10.75.7.0/24", "10.75.8.0/24", "10.75.9.0/24"]
-  db_subnet_cidrs     = ["10.75.10.0/24", "10.75.11.0/24", "10.75.12.0/24"]
+  # The account has reached its VPC quota in us-east-1, so this stack is built
+  # inside the existing default VPC (172.31.0.0/16) on its own free /24 ranges.
+  # Each environment uses a separate block: dev 172.31.128-139, prod
+  # 172.31.144-155, ecs-dev 172.31.160-171, ecs-prod 172.31.176-187. To give
+  # the stack its own VPC again, delete existing_vpc_id and set a new
+  # vpc_cidr and subnet ranges (e.g. 10.x.0.0/16).
+  existing_vpc_id     = "vpc-0e13ae6de03f62cd5"
+  vpc_cidr            = "172.31.0.0/16"
+  public_subnet_cidrs = ["172.31.128.0/24", "172.31.129.0/24", "172.31.130.0/24"]
+  web_subnet_cidrs    = ["172.31.131.0/24", "172.31.132.0/24", "172.31.133.0/24"]
+  app_subnet_cidrs    = ["172.31.134.0/24", "172.31.135.0/24", "172.31.136.0/24"]
+  db_subnet_cidrs     = ["172.31.137.0/24", "172.31.138.0/24", "172.31.139.0/24"]
   # use1-az3 does not offer many current instance types (including some t3
   # sizes), so the stack uses three of the other us-east-1 AZs.
   excluded_zone_ids = ["use1-az3"]

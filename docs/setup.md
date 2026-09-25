@@ -171,6 +171,35 @@ Notes:
   approves), or delete the role and the `AWS_BOOTSTRAP_ROLE_ARN` variable. **Keep the OIDC
   provider:** every pipeline role uses it.
 
+## VPC quota full: use an existing VPC
+
+Each environment normally creates its own VPC. If `terraform apply` fails with
+`VpcLimitExceeded`, the region has no room for another VPC. Either ask the
+account admin to raise **Service Quotas → Amazon VPC → VPCs per Region** or
+remove unused VPCs, or build the stack inside a VPC that already exists:
+
+In `infra/terraform/environments/<env>/main.tf` set
+
+```hcl
+existing_vpc_id = "vpc-0123456789abcdef0"   # must have an internet gateway
+vpc_cidr        = "172.31.0.0/16"           # that VPC's CIDR, for reference
+```
+
+and choose subnet ranges inside that VPC that no other subnet uses (check
+**VPC → Subnets**, filtered by the VPC). The stack still gets its own public,
+private and database subnets, NAT gateway, route tables, flow logs (per
+subnet) and security groups. It never changes the VPC itself, its internet
+gateway, its default security group or other subnets, and Destroy removes only
+what the stack created.
+
+This repository is currently set up this way: all four stacks use the default
+VPC `vpc-0e13ae6de03f62cd5` (172.31.0.0/16) with separate /24 blocks (dev
+172.31.128–139, prod 172.31.144–155, ecs-dev 172.31.160–171, ecs-prod
+172.31.176–187). Trade-off: other workloads in the same VPC are on the same
+network, so the security groups (not the VPC boundary) are what keeps them out.
+To go back to a dedicated VPC, delete `existing_vpc_id` and set a new
+`vpc_cidr` and subnet ranges (e.g. `10.75.0.0/16`).
+
 ## 2. Configure GitHub
 
 **Repository variables** (Settings → Secrets and variables → Actions → Variables):

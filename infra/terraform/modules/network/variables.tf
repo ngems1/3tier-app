@@ -9,8 +9,19 @@ variable "environment" {
 }
 
 variable "cidr_block" {
-  description = "VPC CIDR block"
+  description = "CIDR block of the VPC to create (ignored when existing_vpc_id is set)"
   type        = string
+}
+
+variable "existing_vpc_id" {
+  description = "Build the subnets inside this existing VPC instead of creating a VPC (e.g. when the account's VPC quota is full). The VPC must have an internet gateway, and the subnet CIDRs must be free ranges inside it. Empty = create a VPC."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.existing_vpc_id == "" || can(regex("^vpc-[0-9a-f]{8,17}$", var.existing_vpc_id))
+    error_message = "existing_vpc_id must be empty or a VPC ID such as vpc-0123456789abcdef0."
+  }
 }
 
 variable "public_subnet_cidrs" {

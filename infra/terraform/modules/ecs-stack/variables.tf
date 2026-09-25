@@ -38,7 +38,14 @@ variable "app_version" {
 # --- Network -----------------------------------------------------------------
 
 variable "vpc_cidr" {
-  type = string
+  description = "CIDR of the VPC to create; when existing_vpc_id is set, the CIDR of that VPC (for reference only)"
+  type        = string
+}
+
+variable "existing_vpc_id" {
+  description = "Put the stack in this existing VPC instead of creating one (see modules/network). Empty = create a VPC."
+  type        = string
+  default     = ""
 }
 
 variable "public_subnet_cidrs" {

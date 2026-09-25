@@ -109,6 +109,7 @@ module "network" {
   iam_name                = local.name
   environment             = var.environment
   cidr_block              = var.vpc_cidr
+  existing_vpc_id         = var.existing_vpc_id
   public_subnet_cidrs     = var.public_subnet_cidrs
   web_subnet_cidrs        = var.frontend_subnet_cidrs
   app_subnet_cidrs        = var.backend_subnet_cidrs

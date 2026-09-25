@@ -98,7 +98,10 @@ flowchart TB
 ```
 
 Each platform has its **own VPC, load balancer and database**, so they never
-affect each other. HTTPS with a custom domain turns on automatically once a
+affect each other. Because the shared AWS account has reached its VPC quota,
+the environments currently build their subnets, NAT gateway and route tables
+inside the account's existing default VPC, each on its own address ranges
+(setting `existing_vpc_id`, see [docs/setup.md](docs/setup.md#vpc-quota-full-use-an-existing-vpc)). HTTPS with a custom domain turns on automatically once a
 Route 53 hosted zone is configured; until then the app is served over HTTP on
 the load balancer's address.
 
