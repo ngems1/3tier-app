@@ -42,6 +42,6 @@ variable "create_oidc_provider" {
 variable "state_bucket_name" {
   description = "S3 bucket that holds Terraform state"
   type        = string
-  default     = "cloudbatch818-three-tier-tfstate-9ntql4o5"
+  default     = "cloudbatch818-three-tier-tfstate-seb"
 }
 

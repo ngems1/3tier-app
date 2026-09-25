@@ -30,7 +30,7 @@ env:
   TF_VERSION: "1.16.4"
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
   # Must match state-bucket/variables.tf and every backend block.
-  STATE_BUCKET: cloudbatch818-three-tier-tfstate-9ntql4o5
+  STATE_BUCKET: cloudbatch818-three-tier-tfstate-seb
   STATE_BUCKET_KEY: cloudbatch818-three-tier/state-bucket/terraform.tfstate
 
 jobs:
@@ -51,6 +51,21 @@ jobs:
             echo "::error::Set the AWS_BOOTSTRAP_ROLE_ARN variable on the 'prod' environment (docs/setup.md, Option B)."
             exit 1
           fi
+
+      # Prints who GitHub says this job is (the "sub" claim). The role's trust
+      # policy must allow exactly this value; compare them if sign-in fails.
+      # Only the claims are shown, never the token itself.
+      - name: Show the identity GitHub presents to AWS
+        run: |
+          token=$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
+          echo "::add-mask::${token}"
+          payload=$(cut -d. -f2 <<<"${token}" | tr '_-' '/+')
+          while [ $(( ${#payload} % 4 )) -ne 0 ]; do payload="${payload}="; done
+          base64 -d <<<"${payload}" | jq '{sub, aud, repository, environment, ref}'
+          echo "Role: ${ROLE_ARN}"
+        env:
+          ROLE_ARN: ${{ vars.AWS_BOOTSTRAP_ROLE_ARN }}
 
       - uses: aws-actions/configure-aws-credentials@v6
         with:

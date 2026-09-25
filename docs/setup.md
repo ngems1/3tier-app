@@ -37,7 +37,7 @@ terraform init
 terraform apply
 ```
 
-Creates `cloudbatch818-three-tier-tfstate-9ntql4o5`, the encrypted, versioned
+Creates `cloudbatch818-three-tier-tfstate-seb`, the encrypted, versioned
 bucket that stores every other Terraform state. This folder keeps its own
 small state locally; that's intentional. If the name is ever taken, change it
 in `state-bucket/variables.tf`, `bootstrap/variables.tf` and every `backend`

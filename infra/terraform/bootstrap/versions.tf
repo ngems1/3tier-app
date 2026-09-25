@@ -11,7 +11,7 @@ terraform {
   # Stored next to the environment states, in the bucket created by
   # ../state-bucket (apply that folder first).
   backend "s3" {
-    bucket       = "cloudbatch818-three-tier-tfstate-9ntql4o5"
+    bucket       = "cloudbatch818-three-tier-tfstate-seb"
     key          = "cloudbatch818-three-tier/bootstrap/terraform.tfstate"
     region       = "us-east-1"
     encrypt      = true

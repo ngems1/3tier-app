@@ -11,7 +11,7 @@ Before you start, note two values and replace them everywhere below:
 | `ACCOUNT_ID` | Console, top right → your account name → the 12-digit **Account ID** | `123456789012` |
 | `REPO` | Your GitHub repository as `owner/name` | `ngems1/3tier-app` |
 
-`STATE_BUCKET` is the Terraform state bucket: `cloudbatch818-three-tier-tfstate-9ntql4o5`.
+`STATE_BUCKET` is the Terraform state bucket: `cloudbatch818-three-tier-tfstate-seb`.
 Create it first (step 0).
 
 Set the console region to **US East (N. Virginia) us-east-1** for the S3 steps.
@@ -24,7 +24,7 @@ IAM is global, so the region doesn't matter there.
 (Or run `infra/terraform/state-bucket` with Terraform instead.)
 
 S3 → **Create bucket**
-- Name: `cloudbatch818-three-tier-tfstate-9ntql4o5`
+- Name: `cloudbatch818-three-tier-tfstate-seb`
 - Region: us-east-1
 - Block all public access: **on**
 - Bucket versioning: **Enable**
