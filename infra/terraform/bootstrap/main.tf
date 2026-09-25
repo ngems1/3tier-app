@@ -233,6 +233,7 @@ data "aws_iam_policy_document" "build" {
       "ecr:GetDownloadUrlForLayer",
       "ecr:InitiateLayerUpload",
       "ecr:PutImage",
+      "ecr:StartImageScan",
       "ecr:UploadLayerPart",
     ]
     resources = [for r in aws_ecr_repository.app : r.arn]

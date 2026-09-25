@@ -64,12 +64,58 @@ jobs:
           docker push "${image}"
 
       # ECR scans every pushed image: block the release on CRITICAL findings
-      # and report HIGH ones in the run summary.
+      # and report HIGH ones in the run summary. Right after a push the scan
+      # may not exist yet (or the registry doesn't scan on push), so poll, and
+      # start a scan ourselves if none shows up. Works with basic scanning and
+      # with enhanced scanning (Amazon Inspector).
       - name: ECR scan gate
         run: |
-          aws ecr wait image-scan-complete --repository-name "${REPOSITORY}" --image-id "imageTag=${VERSION}"
-          counts=$(aws ecr describe-image-scan-findings --repository-name "${REPOSITORY}" --image-id "imageTag=${VERSION}" \
-            --query 'imageScanFindings.findingSeverityCounts' --output json)
+          args=(--repository-name "${REPOSITORY}" --image-id "imageTag=${VERSION}")
+          started=false
+          done=false
+          for attempt in $(seq 1 40); do
+            if out=$(aws ecr describe-image-scan-findings "${args[@]}" --output json 2>scan-error.txt); then
+              status=$(jq -r '.imageScanStatus.status' <<<"${out}")
+              case "${status}" in
+                COMPLETE|ACTIVE)
+                  done=true
+                  break
+                  ;;
+                FAILED|UNSUPPORTED_IMAGE|FINDINGS_UNAVAILABLE|SCAN_ELIGIBILITY_EXPIRED)
+                  echo "::error::ECR scan of ${REPOSITORY}:${VERSION} ended with status ${status}: $(jq -r '.imageScanStatus.description // ""' <<<"${out}")"
+                  exit 1
+                  ;;
+                *)
+                  echo "Scan status: ${status}. Waiting (attempt ${attempt}/40)."
+                  ;;
+              esac
+            elif grep -q ScanNotFoundException scan-error.txt; then
+              echo "No scan for ${REPOSITORY}:${VERSION} yet (attempt ${attempt}/40)."
+              if [ "${started}" = false ] && [ "${attempt}" -ge 3 ]; then
+                if aws ecr start-image-scan "${args[@]}" >/dev/null 2>scan-start-error.txt; then
+                  echo "Started a scan."
+                else
+                  echo "Could not start a scan (still waiting for ECR's own scan):"
+                  cat scan-start-error.txt
+                fi
+                started=true
+              fi
+            else
+              cat scan-error.txt
+              exit 1
+            fi
+            sleep 15
+          done
+          if [ "${done}" != true ]; then
+            echo "::error::No ECR scan result for ${REPOSITORY}:${VERSION} after 10 minutes. Check that scanning is enabled in ECR (Private registry -> Scanning) and that the build role may call ecr:StartImageScan (re-run Bootstrap with apply)."
+            exit 1
+          fi
+
+          # Basic scanning reports severity counts; enhanced scanning lists
+          # each finding, so count those if the totals are missing.
+          counts=$(jq '.imageScanFindings.findingSeverityCounts
+            // ((.imageScanFindings.enhancedFindings // []) | map(.severity) | group_by(.) | map({(.[0]): length}) | add)
+            // {}' <<<"${out}")
           critical=$(jq -r '.CRITICAL // 0' <<<"${counts}")
           high=$(jq -r '.HIGH // 0' <<<"${counts}")
           {
