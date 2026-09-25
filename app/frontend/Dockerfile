@@ -10,6 +10,11 @@ RUN npm run build
 
 # ---- runtime stage: unprivileged Nginx serving the static build ----
 FROM nginxinc/nginx-unprivileged:1.27-alpine
+# The base image can lag behind Alpine security fixes (e.g. OpenSSL, c-ares):
+# apply every available OS update at build time, then drop back to the
+# image's unprivileged user.
+USER root
+RUN apk upgrade --no-cache
 COPY --from=build /usr/src/app/build /usr/share/nginx/html
 COPY nginx/nginx.conf /etc/nginx/nginx.conf
 COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
