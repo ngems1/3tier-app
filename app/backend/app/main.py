@@ -13,7 +13,7 @@ Routes
 from __future__ import annotations
 
 import logging
-import time
+import threading
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -45,33 +45,52 @@ def _build_repository() -> tuple[TaskRepository, str, bool]:
     return TaskRepository(db), settings.app_version, settings.init_schema
 
 
-def _init_schema(repo: TaskRepository, attempts: int = 10, delay: float = 3.0) -> None:
-    for attempt in range(1, attempts + 1):
+def _init_schema(
+    repo: TaskStore,
+    stop: threading.Event | None = None,
+    first_delay: float = 5.0,
+    max_delay: float = 60.0,
+) -> bool:
+    """Create the schema, retrying with exponential backoff until it succeeds.
+
+    Runs in a background thread so the API starts (and passes the load
+    balancer's liveness check) even while the database is unreachable; the
+    readiness endpoint reports the database as down meanwhile. The backoff
+    keeps a failing instance from flooding MySQL with connection attempts.
+    Returns False only if stopped before the schema was created.
+    """
+    stop = stop or threading.Event()
+    delay = first_delay
+    attempt = 0
+    while not stop.is_set():
+        attempt += 1
         try:
             repo.init_schema()
             log.info("Database schema is ready")
-            return
-        except pymysql.err.Error as exc:
-            log.warning("Schema init attempt %d/%d failed: %s", attempt, attempts, exc)
-            if attempt == attempts:
-                raise
-            time.sleep(delay)
+            return True
+        except Exception as exc:  # noqa: BLE001 - any failure (network, TLS, credentials) is retried
+            log.warning("Schema init attempt %d failed, retrying in %.0fs: %s", attempt, delay, exc)
+        stop.wait(delay)
+        delay = min(delay * 2, max_delay)
+    return False
 
 
 def create_app(repository: TaskStore | None = None, version: str = "test") -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        stop = threading.Event()
         if repository is None:
             repo, app_version, init_schema = _build_repository()
-            if init_schema:
-                _init_schema(repo)
             app.state.repository = repo
             app.state.version = app_version
+            if init_schema:
+                threading.Thread(target=_init_schema, args=(repo, stop), name="schema-init", daemon=True).start()
         else:
             app.state.repository = repository
             app.state.version = version
         log.info("Tasks API started (version %s)", app.state.version)
         yield
+        stop.set()
 
     app = FastAPI(title="Tasks API", lifespan=lifespan)
 

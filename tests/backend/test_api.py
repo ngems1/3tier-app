@@ -56,3 +56,35 @@ def test_database_errors_return_500_without_leaking_details(client, store):
     res = client.get("/api/tasks")
     assert res.status_code == 500
     assert res.json() == {"detail": "database error"}
+
+
+def test_schema_init_retries_until_the_database_is_reachable():
+    import pymysql
+
+    from app.main import _init_schema
+
+    class FlakyRepo:
+        calls = 0
+
+        def init_schema(self):
+            self.calls += 1
+            if self.calls < 3:
+                raise pymysql.err.OperationalError(1129, "Host is blocked")
+
+    repo = FlakyRepo()
+    assert _init_schema(repo, first_delay=0, max_delay=0) is True
+    assert repo.calls == 3
+
+
+def test_schema_init_stops_when_the_app_shuts_down():
+    import threading
+
+    from app.main import _init_schema
+
+    class DownRepo:
+        def init_schema(self):
+            raise RuntimeError("database unreachable")
+
+    stop = threading.Event()
+    stop.set()
+    assert _init_schema(DownRepo(), stop=stop, first_delay=0) is False

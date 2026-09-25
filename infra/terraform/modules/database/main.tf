@@ -21,6 +21,25 @@ resource "aws_db_parameter_group" "this" {
     value = "1"
   }
 
+  # Don't reverse-resolve client IPs. The app connects by IP from private
+  # subnets that have no DNS names; each lookup only slows the handshake, and
+  # if it stalls the client times out, MySQL counts a connection error and
+  # eventually blocks the app host (error 1129). Accounts use '%' hosts, so
+  # nothing depends on host names. Static: applies at the next reboot.
+  parameter {
+    name         = "skip_name_resolve"
+    value        = "1"
+    apply_method = "pending-reboot"
+  }
+
+  # Default is 100. A few app instances restarting while the database is
+  # unavailable can reach that quickly and lock themselves out even after the
+  # database recovers.
+  parameter {
+    name  = "max_connect_errors"
+    value = "100000"
+  }
+
   lifecycle {
     create_before_destroy = true
   }
