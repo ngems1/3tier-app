@@ -64,7 +64,7 @@ template; keep them in sync, because the deploy roles may only manage IAM
 resources and buckets with that prefix).
 
 - If the account already has a GitHub OIDC provider, add `-var create_oidc_provider=false`.
-- If your repository isn't `ngems1/3tier-project`, pass `-var github_repository=<owner>/<repo>`.
+- If your repository isn't `ngems1/3tier-app`, pass `-var github_repository=<owner>/<repo>`.
 
 Keep the outputs: you need them in step 2.
 
@@ -96,7 +96,7 @@ admin) create one role by hand, once.
          "Condition": {
            "StringEquals": {
              "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-             "token.actions.githubusercontent.com:sub": "repo:ngems1/3tier-project:environment:prod"
+             "token.actions.githubusercontent.com:sub": "repo:ngems1/3tier-app:environment:prod"
            }
          }
        }

@@ -2,6 +2,7 @@
 # (egress through NAT), and isolated database subnets (no internet route).
 
 data "aws_availability_zones" "available" {
+  #checkov:skip=CKV_AWS_394:Subnets use a fixed slice of the zone list (one per subnet CIDR), so a new AWS zone never changes the layout; excluded_zone_ids pins out unsupported zones.
   state            = "available"
   exclude_zone_ids = var.excluded_zone_ids
 }

@@ -248,32 +248,72 @@ resource "aws_wafv2_web_acl" "web" {
     allow {}
   }
 
-  dynamic "rule" {
-    for_each = {
-      AWSManagedRulesCommonRuleSet          = 1
-      AWSManagedRulesKnownBadInputsRuleSet  = 2
-      AWSManagedRulesAmazonIpReputationList = 3
+  # OWASP-style common protections
+  rule {
+    name     = "AWSManagedRulesCommonRuleSet"
+    priority = 1
+
+    override_action {
+      none {}
     }
-    content {
-      name     = rule.key
-      priority = rule.value
 
-      override_action {
-        none {}
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesCommonRuleSet"
+        vendor_name = "AWS"
       }
+    }
 
-      statement {
-        managed_rule_group_statement {
-          name        = rule.key
-          vendor_name = "AWS"
-        }
-      }
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.name}-AWSManagedRulesCommonRuleSet"
+      sampled_requests_enabled   = true
+    }
+  }
 
-      visibility_config {
-        cloudwatch_metrics_enabled = true
-        metric_name                = "${var.name}-${rule.key}"
-        sampled_requests_enabled   = true
+  # Known bad inputs, including the Log4j (CVE-2021-44228) lookup patterns
+  rule {
+    name     = "AWSManagedRulesKnownBadInputsRuleSet"
+    priority = 2
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesKnownBadInputsRuleSet"
+        vendor_name = "AWS"
       }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.name}-AWSManagedRulesKnownBadInputsRuleSet"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Requests from IP addresses with a bad reputation
+  rule {
+    name     = "AWSManagedRulesAmazonIpReputationList"
+    priority = 3
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesAmazonIpReputationList"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.name}-AWSManagedRulesAmazonIpReputationList"
+      sampled_requests_enabled   = true
     }
   }
 

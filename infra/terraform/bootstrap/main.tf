@@ -190,6 +190,10 @@ resource "aws_iam_role_policy_attachment" "plan_readonly" {
 
 # BUILD: bake AMIs with Packer and upload release artifacts.
 data "aws_iam_policy_document" "build" {
+  #checkov:skip=CKV_AWS_111:Packer creates temporary instances, volumes, key pairs and security groups whose IDs are unknown until build time.
+  #checkov:skip=CKV_AWS_356:See CKV_AWS_111; EC2 create/describe actions for Packer cannot be scoped to ARNs in advance. ECR and S3 access is scoped to the project repositories and bucket.
+  #checkov:skip=CKV_AWS_109:Packer sets AMI and snapshot attributes on the images it creates; images are not shared outside the account.
+  #checkov:skip=CKV_AWS_107:ecr:GetAuthorizationToken is required for docker login to push release images; it has no resource-level scoping.
   statement {
     sid = "PackerEc2"
     actions = [
@@ -197,7 +201,7 @@ data "aws_iam_policy_document" "build" {
       "ec2:CreateKeyPair", "ec2:CreateSecurityGroup", "ec2:CreateSnapshot", "ec2:CreateTags",
       "ec2:CreateVolume", "ec2:DeleteKeyPair", "ec2:DeleteSecurityGroup", "ec2:DeleteSnapshot",
       "ec2:DeleteVolume", "ec2:DeregisterImage", "ec2:Describe*", "ec2:DetachVolume",
-      "ec2:GetPasswordData", "ec2:ModifyImageAttribute", "ec2:ModifyInstanceAttribute",
+      "ec2:ModifyImageAttribute", "ec2:ModifyInstanceAttribute",
       "ec2:ModifySnapshotAttribute", "ec2:RegisterImage", "ec2:RunInstances", "ec2:StopInstances",
       "ec2:TerminateInstances",
     ]
@@ -256,6 +260,11 @@ resource "aws_iam_role_policy_attachment" "build" {
 # (Project 2). Service access is limited to what the stacks use; IAM changes
 # are limited to this project's own roles.
 data "aws_iam_policy_document" "deploy" {
+  #checkov:skip=CKV_AWS_111:Terraform creates resources whose ARNs are not known in advance across these services; IAM writes are restricted to project-prefixed names.
+  #checkov:skip=CKV_AWS_356:See CKV_AWS_111.
+  #checkov:skip=CKV_AWS_109:IAM permissions management is limited to roles, policies and instance profiles named with the project prefix.
+  #checkov:skip=CKV_AWS_107:The deploy role manages the RDS-managed database secret (Secrets Manager) and passes only project roles.
+  #checkov:skip=CKV_AWS_108:The deploy role reads Terraform state and project resources to plan changes; access is limited to this account and the project buckets.
   statement {
     sid = "ManageStackServices"
     actions = [

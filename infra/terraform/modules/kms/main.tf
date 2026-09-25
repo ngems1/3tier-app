@@ -13,6 +13,9 @@ locals {
 }
 
 data "aws_iam_policy_document" "key" {
+  #checkov:skip=CKV_AWS_109:Key policy: the account root statement is the AWS-recommended default so IAM policies govern key use; "*" in a key policy means this key only.
+  #checkov:skip=CKV_AWS_111:See CKV_AWS_109.
+  #checkov:skip=CKV_AWS_356:See CKV_AWS_109.
   statement {
     sid       = "AccountAdministration"
     actions   = ["kms:*"]

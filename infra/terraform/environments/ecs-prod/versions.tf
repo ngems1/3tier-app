@@ -18,7 +18,7 @@ provider "aws" {
       Environment = "prod"
       Platform    = "ecs"
       ManagedBy   = "terraform"
-      Repository  = "3tier-project"
+      Repository  = "3tier-app"
     }
   }
 }

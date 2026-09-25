@@ -24,7 +24,7 @@ variable "images_to_keep" {
 variable "github_repository" {
   description = "GitHub repository allowed to assume the CI roles, as owner/name"
   type        = string
-  default     = "ngems1/3tier-project"
+  default     = "ngems1/3tier-app"
 }
 
 variable "environments" {

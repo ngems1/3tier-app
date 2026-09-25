@@ -10,7 +10,7 @@
       "Condition": {
         "StringEquals": {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:ngems1/3tier-project:environment:prod"
+          "token.actions.githubusercontent.com:sub": "repo:ngems1/3tier-app:environment:prod"
         }
       }
     }

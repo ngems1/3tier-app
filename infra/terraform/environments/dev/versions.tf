@@ -17,7 +17,7 @@ provider "aws" {
       Project     = "cloudbatch818-three-tier"
       Environment = "dev"
       ManagedBy   = "terraform"
-      Repository  = "3tier-project"
+      Repository  = "3tier-app"
     }
   }
 }

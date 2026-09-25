@@ -9,7 +9,7 @@ Before you start, note two values and replace them everywhere below:
 | Placeholder | Where to find it | Example |
 |---|---|---|
 | `ACCOUNT_ID` | Console, top right → your account name → the 12-digit **Account ID** | `123456789012` |
-| `REPO` | Your GitHub repository as `owner/name` | `ngems1/3tier-project` |
+| `REPO` | Your GitHub repository as `owner/name` | `ngems1/3tier-app` |
 
 `STATE_BUCKET` is the Terraform state bucket: `cloudbatch818-three-tier-tfstate-9ntql4o5`.
 Create it first (step 0).
@@ -237,10 +237,10 @@ All four trust policies have the same shape; only the `sub` values differ:
 | `cloudbatch818-three-tier-github-deploy-dev` | `["repo:REPO:environment:dev"]` | `cloudbatch818-three-tier-github-deploy` |
 | `cloudbatch818-three-tier-github-deploy-prod` | `["repo:REPO:environment:prod"]` | `cloudbatch818-three-tier-github-deploy` |
 
-Example for the dev deploy role with `REPO` = `ngems1/3tier-project`:
+Example for the dev deploy role with `REPO` = `ngems1/3tier-app`:
 
 ```json
-"token.actions.githubusercontent.com:sub": ["repo:ngems1/3tier-project:environment:dev"]
+"token.actions.githubusercontent.com:sub": ["repo:ngems1/3tier-app:environment:dev"]
 ```
 
 ---
