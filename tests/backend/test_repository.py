@@ -120,7 +120,8 @@ def test_tls_is_enabled_when_a_ca_bundle_is_configured():
 
     with Database(cfg, CredentialProvider(cfg), connect=connect).connection():
         pass
-    assert captured["ssl"] == {"ca": "/etc/pki/rds/global-bundle.pem"}
+    assert captured["ssl_ca"] == "/etc/pki/rds/global-bundle.pem"
+    assert "ssl" not in captured  # PyMySQL ignores ssl={...} when ssl_* arguments are set
     assert captured["ssl_verify_cert"] is True
 
 
