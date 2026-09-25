@@ -5,12 +5,19 @@ FROM python:3.11-slim AS build
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN python -m venv /opt/venv
 COPY requirements.txt /tmp/requirements.txt
-RUN /opt/venv/bin/pip install -r /tmp/requirements.txt
+# Install the app's dependencies, then remove the packaging tools (pip,
+# setuptools, wheel) from the virtualenv: the app never needs them at runtime,
+# and they bundle libraries with known vulnerabilities (e.g. wheel,
+# jaraco.context inside setuptools).
+RUN /opt/venv/bin/pip install -r /tmp/requirements.txt \
+ && /opt/venv/bin/pip uninstall -y pip setuptools wheel
 # Amazon RDS CA bundle, so the API can verify the database's TLS certificate.
 RUN python -c "import urllib.request; urllib.request.urlretrieve('https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem', '/tmp/rds-global-bundle.pem')"
 
 # ---- runtime stage: slim image, non-root user ----
 FROM python:3.11-slim
+# The base image's own packaging tools aren't needed at runtime either.
+RUN python -m pip uninstall -y pip setuptools wheel
 ENV PATH="/opt/venv/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN groupadd --system app && useradd --system --gid app --no-create-home app
 COPY --from=build /opt/venv /opt/venv
