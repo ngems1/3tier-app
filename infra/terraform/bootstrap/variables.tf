@@ -27,6 +27,18 @@ variable "github_repository" {
   default     = "ngems1/3tier-app"
 }
 
+variable "github_repository_with_ids" {
+  description = <<-EOT
+    The same repository in GitHub's ID-based format, owner@ownerID/name@repoID.
+    GitHub sends the OIDC "sub" claim in this format for this repository, e.g.
+    repo:ngems1@330211773/3tier-app@1385421481:environment:dev. Both formats
+    are accepted, so the roles keep working either way. Set to "" to accept only
+    the name-based format.
+  EOT
+  type        = string
+  default     = "ngems1@330211773/3tier-app@1385421481"
+}
+
 variable "environments" {
   description = "Deployment environments; each gets its own deploy role bound to the matching GitHub Environment"
   type        = list(string)

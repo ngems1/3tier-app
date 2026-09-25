@@ -18,9 +18,11 @@ locals {
   account_id = data.aws_caller_identity.current.account_id
   partition  = data.aws_partition.current.partition
   oidc_arn   = var.create_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : data.aws_iam_openid_connect_provider.github[0].arn
-  repo_sub   = "repo:${var.github_repository}"
-  state_arn  = "arn:${local.partition}:s3:::${var.state_bucket_name}"
-  iam_name   = var.project
+  # GitHub identifies the repository either by name (owner/repo) or by name and
+  # numeric IDs (owner@id/repo@id); accept both.
+  repo_subs = compact(["repo:${var.github_repository}", var.github_repository_with_ids == "" ? "" : "repo:${var.github_repository_with_ids}"])
+  state_arn = "arn:${local.partition}:s3:::${var.state_bucket_name}"
+  iam_name  = var.project
 }
 
 # ---------------------------------------------------------------------------
@@ -43,10 +45,10 @@ data "aws_iam_openid_connect_provider" "github" {
 data "aws_iam_policy_document" "trust" {
   for_each = merge(
     {
-      plan  = ["${local.repo_sub}:pull_request", "${local.repo_sub}:ref:refs/heads/main"]
-      build = ["${local.repo_sub}:ref:refs/heads/main", "${local.repo_sub}:environment:build"]
+      plan  = flatten([for r in local.repo_subs : ["${r}:pull_request", "${r}:ref:refs/heads/main"]])
+      build = flatten([for r in local.repo_subs : ["${r}:ref:refs/heads/main", "${r}:environment:build"]])
     },
-    { for env in var.environments : "deploy-${env}" => ["${local.repo_sub}:environment:${env}"] },
+    { for env in var.environments : "deploy-${env}" => [for r in local.repo_subs : "${r}:environment:${env}"] },
   )
 
   statement {
