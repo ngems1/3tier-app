@@ -79,7 +79,11 @@ class Database:
         }
         if self._settings.db_ssl_ca:
             # Encrypt data in transit and verify the RDS server certificate.
-            options["ssl"] = {"ca": self._settings.db_ssl_ca}
+            # Pass the CA as ssl_ca: when any ssl_* argument is given, PyMySQL
+            # rebuilds its SSL settings from the ssl_* arguments alone and
+            # ignores an ssl={"ca": ...} dict, which would fall back to the
+            # system trust store (no RDS CA -> CERTIFICATE_VERIFY_FAILED).
+            options["ssl_ca"] = self._settings.db_ssl_ca
             options["ssl_verify_cert"] = True
             options["ssl_verify_identity"] = True
         return self._connect(**options)
