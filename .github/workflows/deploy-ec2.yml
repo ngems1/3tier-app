@@ -24,6 +24,14 @@ name: Deploy EC2
 on:
   push:
     branches: [main]
+    # Documentation-only changes don't deploy. A push that also touches any
+    # other file still deploys as usual.
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".gitignore"
+      - ".gitattributes"
   workflow_dispatch:
     inputs:
       environment:

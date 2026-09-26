@@ -11,6 +11,10 @@
 #   codeql     code-quality and security analysis (Python + JavaScript)
 #   plan       pull requests only: read-only Terraform plan against every
 #              deployed environment (EC2 dev/prod, ECS dev/prod)
+#   approval   pull requests only: waits for a reviewer of the GitHub
+#              Environment "pr-approval" (you can approve your own pull
+#              request here; GitHub's own PR review never allows that).
+#              Make "Manual approval" a required status check on main.
 
 name: CI
 
@@ -274,4 +278,24 @@ jobs:
             echo '```'
             tail -c 60000 plan.txt
             echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Self-approval gate. GitHub never lets the author approve their own pull
+  # request, but a required reviewer of an Environment can approve a job that
+  # they triggered. Runs after every check (and the plans) so you approve
+  # knowing the results; a failed check means nothing to approve.
+  approval:
+    name: Manual approval
+    needs: [backend, frontend, terraform, packer, security, codeql, plan]
+    if: >-
+      always() && github.event_name == 'pull_request' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    environment: pr-approval
+    steps:
+      - name: Approved
+        run: |
+          {
+            echo "### Pull request #${{ github.event.pull_request.number }} approved for merge"
+            echo "All checks passed and a reviewer of the \`pr-approval\` environment approved this run."
           } >> "$GITHUB_STEP_SUMMARY"

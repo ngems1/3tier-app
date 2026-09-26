@@ -2,6 +2,12 @@
 # environment of one platform with that environment's deploy role, waits for
 # the rollout to finish, and runs the smoke tests.
 #
+# Automatic rollback: if the rollout or the smoke tests fail, the environment
+# is redeployed with the previously recorded good release (same Terraform
+# code, previous AMIs / images) and smoke-tested again. The job still fails,
+# so the pipeline stops (prod is never planned after a failed dev), and the
+# summary says whether the rollback worked.
+#
 # The job runs in the matching GitHub Environment (dev or prod) for both
 # platforms, so the same protection rules (required reviewers on prod) and
 # deploy roles apply to EC2 and ECS, and GitHub records the deployment history.
@@ -102,6 +108,7 @@ jobs:
       # EC2: rolling instance refresh of both Auto Scaling groups (the refresh
       # rolls back by itself if new instances fail their health checks).
       - name: Wait for rolling instance refresh (EC2)
+        id: rollout_ec2
         if: inputs.platform == 'ec2'
         run: |
           bash deploy/ec2/wait-for-refresh.sh \
@@ -111,10 +118,12 @@ jobs:
       # ECS: rolling service deployment (the deployment circuit breaker rolls
       # back by itself if new tasks keep failing).
       - name: Wait for the service deployments (ECS)
+        id: rollout_ecs
         if: inputs.platform == 'ecs'
         run: bash deploy/ecs/verify-deployment.sh "$TF_DIR"
 
       - name: Smoke tests
+        id: smoke
         run: bash tests/smoke/smoke_test.sh "${{ steps.outputs.outputs.app_url }}" "${{ inputs.version }}"
 
       # Only now is the release known to be good: record it as the deployed
@@ -125,19 +134,58 @@ jobs:
             --value "${{ inputs.version }}" >/dev/null
           echo "Recorded ${{ inputs.version }} in $VERSION_PARAMETER"
 
+      # The new release was applied but is not working (rollout or smoke tests
+      # failed): put the last known-good release back. Skipped on a first
+      # deployment (nothing to go back to), when redeploying the same release,
+      # and when terraform apply itself failed (the stack may be half-changed;
+      # that needs a person to look at the plan).
+      - name: Automatic rollback to the previous release
+        id: rollback
+        if: >-
+          failure() &&
+          (steps.rollout_ec2.outcome == 'failure' || steps.rollout_ecs.outcome == 'failure' ||
+            steps.smoke.outcome == 'failure') &&
+          steps.previous.outputs.version != 'none' &&
+          steps.previous.outputs.version != inputs.version
+        env:
+          PREVIOUS: ${{ steps.previous.outputs.version }}
+          PLATFORM: ${{ inputs.platform }}
+          APP_URL: ${{ steps.outputs.outputs.app_url }}
+        run: |
+          echo "::warning::Release ${{ inputs.version }} failed on ${PLATFORM} ${{ inputs.environment }}; rolling back to ${PREVIOUS}."
+          terraform -chdir="$TF_DIR" apply -input=false -auto-approve -var "app_version=${PREVIOUS}"
+          if [ "${PLATFORM}" = "ec2" ]; then
+            bash deploy/ec2/wait-for-refresh.sh \
+              "$(terraform -chdir="$TF_DIR" output -raw app_asg_name)" \
+              "$(terraform -chdir="$TF_DIR" output -raw web_asg_name)"
+          else
+            bash deploy/ecs/verify-deployment.sh "$TF_DIR"
+          fi
+          bash tests/smoke/smoke_test.sh "${APP_URL}" "${PREVIOUS}"
+
       - name: Deployment summary
         if: always()
         env:
           PREVIOUS: ${{ steps.previous.outputs.version }}
           STATUS: ${{ job.status }}
+          ROLLBACK: ${{ steps.rollback.outcome }}
         run: |
           {
             echo "### ${{ inputs.platform }} ${{ inputs.environment }}: ${STATUS}"
             echo "- Release: \`${{ inputs.version }}\`"
             echo "- Previous release: \`${PREVIOUS}\`"
             echo "- URL: ${{ steps.outputs.outputs.app_url }}"
-            if [ "${STATUS}" != "success" ] && [ -n "${PREVIOUS}" ] && [ "${PREVIOUS}" != "none" ]; then
-              echo ""
-              echo "**Roll back:** Actions > ${WORKFLOW_NAME} > Run workflow with environment \`${{ inputs.environment }}\` and version \`${PREVIOUS}\`."
-            fi
+            case "${ROLLBACK}" in
+              success)
+                echo ""
+                echo "**Automatically rolled back** to \`${PREVIOUS}\`: it is running again and passed the smoke tests. Fix the problem in a new pull request." ;;
+              failure)
+                echo ""
+                echo "**Automatic rollback to \`${PREVIOUS}\` failed.** Check the rollback step's log. Manual rollback: Actions > ${WORKFLOW_NAME} > Run workflow with environment \`${{ inputs.environment }}\` and version \`${PREVIOUS}\`." ;;
+              *)
+                if [ "${STATUS}" != "success" ] && [ -n "${PREVIOUS}" ] && [ "${PREVIOUS}" != "none" ]; then
+                  echo ""
+                  echo "**Roll back:** Actions > ${WORKFLOW_NAME} > Run workflow with environment \`${{ inputs.environment }}\` and version \`${PREVIOUS}\`."
+                fi ;;
+            esac
           } >> "$GITHUB_STEP_SUMMARY"
