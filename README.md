@@ -187,7 +187,7 @@ npm ci && npm run lint && npm run test:ci && npm run build
 ```mermaid
 flowchart LR
     pr[Pull request] --> ci[CI<br/>tests + security scans]
-    push[Push to main] --> ci2[CI] --> build[Build release<br/>EC2: Packer AMIs · ECS: Docker images]
+    push[Push to main] --> ci2[CI] --> build[Build release<br/>AMIs / images]
     build --> dev[Deploy dev<br/>+ smoke tests]
     dev --> approve{{Approval}} --> prod[Deploy prod<br/>+ smoke tests]
 ```
@@ -195,7 +195,7 @@ flowchart LR
 | Workflow | When | What it does |
 |---|---|---|
 | `ci.yml` | Every pull request (and before every deploy) | Lint, tests, Terraform checks, Checkov, Trivy, CodeQL, dependency audits, read-only plans |
-| `deploy-ec2.yml` | Push to `main` or manual | Builds the AMIs with Packer, deploys EC2 dev, then prod after approval |
+| `deploy-ec2.yml` | Push to `main` or manual | Builds AMIs + images, deploys dev, then prod after approval |
 | `deploy-ecs.yml` | Push to `main` or manual | Builds images, deploys ECS dev, then prod after approval |
 | `bootstrap.yml` | Manual, once | Creates the state bucket, OIDC roles, artifact bucket and ECR repos |
 | `destroy.yml` | Manual | Removes one environment (typed confirmation; prod needs approval) |
@@ -235,8 +235,10 @@ Full step-by-step guide: **[docs/setup.md](docs/setup.md)**. In short:
 5. **Deploy** — push to `main`, or run *Deploy EC2* / *Deploy ECS* manually.
    The app URL is shown in the run summary.
 
-**Rollback:** run *Deploy EC2* or *Deploy ECS* manually with the previous
-commit SHA as `version` — nothing is rebuilt.
+**Rollback:** automatic when a deploy's rollout or smoke tests fail — the
+pipeline puts the previous good release back and smoke-tests it. To roll back
+by hand, run *Deploy EC2* or *Deploy ECS* manually with the previous commit
+SHA as `version` — nothing is rebuilt.
 
 **Clean up:** run *Actions → Destroy*, choose the platform and environment,
 and type the stack name (`dev`, `prod`, `ecs-dev` or `ecs-prod`) to confirm.

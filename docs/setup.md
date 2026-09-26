@@ -224,13 +224,53 @@ and each deploy role trusts only its own environment. EC2 and ECS use the
 same two environments, so one prod approval rule and one deploy role per
 environment cover both platforms.
 
-**Branch protection for `main`** (Settings → Rules → Rulesets):
+**Branch protection for `main`** (Settings → Rules → Rulesets → New ruleset →
+New branch ruleset):
 
-- Require a pull request before merging, with at least 1 approval
-- Require these status checks to pass: `Backend (FastAPI)`, `Frontend (React)`,
-  `Terraform`, `Packer`, `Security scans`, `CodeQL (python)`,
-  `CodeQL (javascript-typescript)`
-- Block force pushes and deletions
+- Ruleset name: `protect-main`, Enforcement status: **Active**
+- Target branches: **Add target → Include default branch**
+- Bypass list: leave empty (the rules apply to you too)
+- ✅ Restrict deletions
+- ✅ Block force pushes
+- ✅ Require a pull request before merging
+  - Required approvals: **0**. GitHub never lets the author approve their own
+    pull request; the **Manual approval** check below is the approval step
+    instead (set this to 1 once someone else reviews your code)
+  - ✅ Dismiss stale pull request approvals when new commits are pushed
+  - ✅ Require conversation resolution before merging
+  - Allowed merge methods: **Squash** (one commit per pull request on `main`)
+- ✅ Require status checks to pass, and ✅ Require branches to be up to date
+  before merging. Add: `Backend (FastAPI)`, `Frontend (React)`, `Terraform`,
+  `Packer`, `Security scans`, `CodeQL (python)`,
+  `CodeQL (javascript-typescript)`, `Manual approval`. GitHub only offers a check after it has
+  run once, so open a first pull request before adding them. Don't add the
+  `Terraform plan (…)` checks: they are skipped for stacks that aren't
+  deployed.
+
+**Self-approval environment** (Settings → Environments → New environment):
+`pr-approval`, ✅ Required reviewers = yourself, ☐ Prevent self-review,
+☐ Allow administrators to bypass, Deployment branches: **No restriction**
+(pull requests come from feature branches). CI's **Manual approval** job waits
+here on every pull request after all checks pass; click **Review deployments →
+Approve and deploy** and the pull request can be merged.
+
+Also in **Settings → General → Pull Requests**: allow only squash merging and
+tick **Automatically delete head branches**.
+
+### Everyday flow
+
+```bash
+git switch main && git pull           # start from the latest main
+git switch -c feature/short-name      # one branch per change
+# ...edit, then:
+git add -A && git commit -m "Describe the change"
+git push -u origin feature/short-name
+```
+
+GitHub then shows **Compare & pull request**. On the pull request, CI runs and
+the read-only Terraform plan for every deployed stack appears in the run
+summary. When everything is green, **Squash and merge**: the merge is the push
+to `main` that starts the deployment.
 
 CodeQL needs code scanning enabled. That's free for public repositories and
 requires GitHub Advanced Security for private ones.
