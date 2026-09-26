@@ -66,6 +66,14 @@ To do the same from a workstation: `deploy/ec2/deploy.sh <env> <good-sha>`.
 refresh, the ASG rolls back to the previous launch template by itself. The
 deploy job then fails with status `RollbackSuccessful`.
 
+**Pipeline rollback.** If the rollout or the smoke tests fail, the deploy job
+redeploys the last release that passed its smoke tests (recorded in SSM
+`/<project>/<env>/deployed-version`), waits for it and smoke-tests it again.
+The job still fails, so prod is never reached, and the run summary says
+"Automatically rolled back to …". It rolls back the application release only
+(the AMIs or images); Terraform changes from the failed commit stay applied.
+It doesn't run on a first deployment or when `terraform apply` itself failed.
+
 **Infrastructure rollback.** Revert the Terraform change in Git (a pull
 request that reverts the commit) and merge. The pipeline plans and applies
 the revert like any other change.
@@ -152,6 +160,14 @@ Names use the prefix `cloudbatch818-three-tier-ecs-<env>`; the Terraform root is
 checks, the deployment circuit breaker puts the service back on the previous
 task definition. The deploy job then fails with "the deployment circuit
 breaker rolled it back" and lists the service events.
+
+**Pipeline rollback.** If the rollout or the smoke tests fail, the deploy job
+redeploys the last release that passed its smoke tests (recorded in SSM
+`/<project>/<env>/deployed-version`), waits for it and smoke-tests it again.
+The job still fails, so prod is never reached, and the run summary says
+"Automatically rolled back to …". It rolls back the application release only
+(the AMIs or images); Terraform changes from the failed commit stay applied.
+It doesn't run on a first deployment or when `terraform apply` itself failed.
 
 ### Common problems
 
