@@ -195,8 +195,8 @@ flowchart LR
 | Workflow | When | What it does |
 |---|---|---|
 | `ci.yml` | Every pull request (and before every deploy) | Lint, tests, Terraform checks, Checkov, Trivy, CodeQL, dependency audits, read-only plans |
-| `deploy-ec2.yml` | Push to `main` or manual | Builds AMIs + images, deploys dev, then prod after approval |
-| `deploy-ecs.yml` | Push to `main` or manual | Builds images, deploys ECS dev, then prod after approval |
+| `deploy-ec2.yml` | Push to `main` (except docs-only changes) or manual | Builds AMIs + images, deploys dev, then prod after approval |
+| `deploy-ecs.yml` | Push to `main` (except docs-only changes) or manual | Builds images, deploys ECS dev, then prod after approval |
 | `bootstrap.yml` | Manual, once | Creates the state bucket, OIDC roles, artifact bucket and ECR repos |
 | `destroy.yml` | Manual | Removes one environment (typed confirmation; prod needs approval) |
 
