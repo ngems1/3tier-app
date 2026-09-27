@@ -5,8 +5,7 @@
 # A manual run always deploys to EC2, whatever DEPLOY_TARGET says.
 #
 # Push to main:
-#   CI -> build release (artifacts + AMIs tagged with the commit SHA)
-#      -> build, push and scan container images in ECR (same SHA tag)
+#   CI -> build release (artifacts + Packer AMIs tagged with the commit SHA)
 #      -> plan dev -> apply dev -> smoke test
 #      -> plan prod -> [GitHub Environment approval] -> apply prod -> smoke test
 #
@@ -14,6 +13,9 @@
 #   * environment + no version : build the selected ref and deploy it there
 #   * environment + version    : deploy an existing release (rollback/redeploy);
 #                                nothing is rebuilt, the release's AMIs are reused
+#
+# Only the AMIs are built here. Container images are built by deploy-ecs.yml
+# when ECS is deployed, so an EC2 deployment never waits for them.
 #
 # AWS access uses GitHub OIDC with separate roles per stage (see
 # infra/terraform/bootstrap): read-only for plans, build for Packer, and one
@@ -165,28 +167,17 @@ jobs:
             echo "- AMIs tagged \`Version=${VERSION}\` (web + app)"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  images:
-    name: Container images
-    needs: [ci]
-    if: inputs.version == ''
-    uses: ./.github/workflows/reusable-images.yml
-    with:
-      version: ${{ github.sha }}
-    permissions:
-      contents: read
-      id-token: write
-
   # ---------------------------------------------------------------------------
   # dev
   # ---------------------------------------------------------------------------
 
   plan-dev:
     name: Plan dev
-    needs: [release, images]
+    needs: [release]
     if: >-
       always() &&
       (github.event_name == 'push' || inputs.environment == 'dev') &&
-      ((needs.release.result == 'success' && needs.images.result == 'success') ||
+      (needs.release.result == 'success' ||
         (needs.release.result == 'skipped' && inputs.version != ''))
     uses: ./.github/workflows/reusable-terraform-plan.yml
     secrets: inherit
@@ -220,13 +211,13 @@ jobs:
 
   plan-prod:
     name: Plan prod
-    needs: [release, images, apply-dev]
+    needs: [release, apply-dev]
     if: >-
       always() &&
       (
         (github.event_name == 'push' && needs.apply-dev.result == 'success') ||
         (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod' &&
-          ((needs.release.result == 'success' && needs.images.result == 'success') ||
+          (needs.release.result == 'success' ||
             (needs.release.result == 'skipped' && inputs.version != '')))
       )
     uses: ./.github/workflows/reusable-terraform-plan.yml
@@ -256,15 +247,14 @@ jobs:
       id-token: write
 
   # Deploy results (success, failure, automatic rollback) are posted by the
-  # apply jobs. This covers failures earlier on: CI, build, images, plans.
+  # apply jobs. This covers failures earlier on: CI, AMI build, plans.
   notify-failure:
     name: Notify Slack of a pipeline failure
-    needs: [ci, release, images, plan-dev, plan-prod]
+    needs: [ci, release, plan-dev, plan-prod]
     if: >-
       always() && (
       needs.ci.result == 'failure' ||
       needs.release.result == 'failure' ||
-      needs.images.result == 'failure' ||
       needs.plan-dev.result == 'failure' ||
       needs.plan-prod.result == 'failure')
     runs-on: ubuntu-latest
@@ -278,12 +268,11 @@ jobs:
         env:
           RESULT_CI: ${{ needs.ci.result }}
           RESULT_RELEASE: ${{ needs.release.result }}
-          RESULT_IMAGES: ${{ needs.images.result }}
           RESULT_PLAN_DEV: ${{ needs.plan-dev.result }}
           RESULT_PLAN_PROD: ${{ needs.plan-prod.result }}
         run: |
           failed=""
-          for pair in "ci=${RESULT_CI}" "release=${RESULT_RELEASE}" "images=${RESULT_IMAGES}" "plan-dev=${RESULT_PLAN_DEV}" "plan-prod=${RESULT_PLAN_PROD}"; do
+          for pair in "ci=${RESULT_CI}" "release=${RESULT_RELEASE}" "plan-dev=${RESULT_PLAN_DEV}" "plan-prod=${RESULT_PLAN_PROD}"; do
             [ "${pair#*=}" = "failure" ] && failed="${failed:+$failed, }${pair%%=*}"
           done
           echo "stages=${failed}" >> "$GITHUB_OUTPUT"

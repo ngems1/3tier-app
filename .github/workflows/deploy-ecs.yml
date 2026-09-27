@@ -13,7 +13,8 @@
 # Manual run (Actions > Deploy ECS > Run workflow):
 #   * environment + no version : build the selected ref and deploy it there
 #   * environment + version    : deploy an existing release (rollback/redeploy);
-#                                nothing is rebuilt, the release's images are reused
+#                                its images are reused if they exist in ECR, or
+#                                built from that commit if it was never on ECS
 #
 # Uses the same GitHub Environments (dev, prod), deploy roles and approvals as
 # the EC2 workflow. Each platform has its own Terraform state, VPC, load
@@ -89,13 +90,18 @@ jobs:
       security-events: write
       id-token: write
 
+  # Also runs for a manual deploy/rollback of an existing version: images that
+  # already exist in ECR are reused (nothing rebuilt), and a commit that was
+  # only ever deployed to EC2 gets its images built from that commit.
   images:
     name: Container images
-    needs: [ci]
-    if: inputs.version == ''
+    needs: [target, ci]
+    if: >-
+      always() && needs.target.outputs.deploy == 'true' &&
+      (needs.ci.result == 'success' || (needs.ci.result == 'skipped' && inputs.version != ''))
     uses: ./.github/workflows/reusable-images.yml
     with:
-      version: ${{ github.sha }}
+      version: ${{ inputs.version || github.sha }}
     permissions:
       contents: read
       id-token: write
