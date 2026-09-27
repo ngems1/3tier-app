@@ -226,7 +226,8 @@ jobs:
   plan:
     name: Terraform plan (${{ matrix.stack }}, read-only)
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.AWS_PLAN_ROLE_ARN != ''
-    needs: [terraform]
+    # Runs alongside the other checks (no "needs"); "Manual approval" still
+    # waits for all of them, including this one.
     runs-on: ubuntu-latest
     permissions:
       contents: read
