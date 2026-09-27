@@ -26,17 +26,25 @@ delivered by GitHub Actions. The same app can run on **EC2** (Project 1) or on
   dashboards. Offline tests with a mocked AWS provider.
 - **Secure CI/CD** — GitHub Actions signs in to AWS with **OIDC** (no stored AWS
   keys), with separate least-privilege roles for plan, build and deploy.
+- **GitHub Flow** — every change goes through a pull request: CI, a read-only
+  Terraform plan preview and a manual approval gate before it can be merged
+  into a protected `main`.
 - **Quality and security gates** — lint, unit tests, Terraform validate/tests,
-  Checkov, Trivy (code and images), CodeQL, pip-audit and npm audit before
-  anything is deployed.
+  Checkov, Trivy (code, Docker images and every AMI), CodeQL, pip-audit and
+  npm audit before anything is deployed.
 - **Immutable releases** — every release is the git commit SHA: AMIs, Docker
   images and artifacts are tagged with it and never overwritten.
 - **Safe deployments** — rolling updates with automatic rollback (ASG instance
-  refresh / ECS circuit breaker), smoke tests after every deploy, and a manual
-  approval before production.
+  refresh / ECS circuit breaker), smoke tests after every deploy, an
+  **automatic rollback to the last good release when the smoke tests fail**,
+  and a manual approval before production.
+- **Reliable pipeline** — tool downloads retry on errors, documentation-only
+  changes don't deploy, and each platform builds only what it runs (EC2:
+  Packer AMIs, ECS: Docker images).
 - **Slack notifications** — deploy results, prod waiting for approval (with
   the plan summary), automatic rollbacks, pipeline failures, and CloudWatch
-  alarms from every environment (through a small Lambda function).
+  alarms from every environment (through a small Lambda function). With the
+  GitHub app for Slack, prod can be approved from Slack.
 - **Operations built in** — CloudWatch logs, metrics, alarms and dashboards,
   one-click rollback to any previous release, and a Destroy workflow to remove
   an environment when you're done.
@@ -51,7 +59,7 @@ delivered by GitHub Actions. The same app can run on **EC2** (Project 1) or on
 flowchart TB
     user([Users]) --> waf[AWS WAF]
     waf --> alb[Public ALB]
-    subgraph vpc[VPC across 3 Availability Zones]
+    subgraph vpc[VPC 172.31.0.0/16 · the stack's own subnets in 3 Availability Zones]
         subgraph public[Public subnets]
             alb
             nat[NAT gateway]
@@ -72,7 +80,8 @@ flowchart TB
     appasg -->|TLS 3306| rds
     appasg -.->|credentials| sm[Secrets Manager]
     webasg & appasg -.->|logs and metrics| cw[CloudWatch]
-    cw -.-> sns[SNS alerts]
+    cw -.->|alarms| sns[SNS topic]
+    sns -.-> lambda[Lambda<br/>alarm-to-Slack] -.-> slack([Slack])
 ```
 
 ### Project 2 — ECS Fargate
@@ -81,7 +90,7 @@ flowchart TB
 flowchart TB
     user([Users]) --> waf[AWS WAF]
     waf --> alb[Public ALB]
-    subgraph vpc[Separate VPC across 3 Availability Zones]
+    subgraph vpc[VPC 172.31.0.0/16 · the stack's own subnets in 3 Availability Zones]
         subgraph fe[Private frontend subnets]
             fsvc[Frontend service<br/>Nginx + React]
         end
@@ -98,15 +107,35 @@ flowchart TB
     ecr[Amazon ECR<br/>images tagged with the commit SHA] -.->|pinned by digest| fsvc & bsvc
     bsvc -.->|credentials| sm[Secrets Manager]
     fsvc & bsvc -.->|logs, Container Insights| cw[CloudWatch]
+    cw -.->|alarms| sns[SNS topic]
+    sns -.-> lambda[Lambda<br/>alarm-to-Slack] -.-> slack([Slack])
 ```
 
-Each platform has its **own VPC, load balancer and database**, so they never
-affect each other. Because the shared AWS account has reached its VPC quota,
-the environments currently build their subnets, NAT gateway and route tables
-inside the account's existing default VPC, each on its own address ranges
-(setting `existing_vpc_id`, see [docs/setup.md](docs/setup.md#vpc-quota-full-use-an-existing-vpc)). HTTPS with a custom domain turns on automatically once a
-Route 53 hosted zone is configured; until then the app is served over HTTP on
-the load balancer's address.
+Each environment has its **own subnets, NAT gateway, load balancers, database
+and security groups**, so stacks never affect each other. The network module
+can create a dedicated VPC per environment; because the shared AWS account has
+reached its VPC quota, the environments currently build their subnets inside
+the account's existing default VPC (`existing_vpc_id`), each on its own
+address ranges:
+
+| Stack | Subnet ranges (172.31.x.0/24) |
+|---|---|
+| EC2 dev | 172.31.128 – 139 |
+| EC2 prod | 172.31.144 – 155 |
+| ECS dev | 172.31.160 – 171 |
+| ECS prod | 172.31.176 – 187 |
+
+See [docs/setup.md](docs/setup.md#vpc-quota-full-use-an-existing-vpc). HTTPS
+with a custom domain turns on automatically once a Route 53 hosted zone is
+configured; until then the app is served over HTTP on the load balancer's
+address.
+
+**Database connection hardening:** the API verifies the RDS certificate
+against the RDS CA bundle (TLS required); the RDS parameter group sets
+`skip_name_resolve` and a high `max_connect_errors` so app hosts are never
+locked out; and the API starts even when the database is unreachable,
+retrying the connection in the background (liveness stays green, readiness
+reports `database: down`).
 
 ---
 
@@ -117,10 +146,11 @@ the load balancer's address.
 | Frontend | React 18, Nginx (unprivileged), Jest + Testing Library |
 | Backend | FastAPI, Uvicorn, PyMySQL, boto3, pytest, ruff |
 | Database | Amazon RDS for MySQL 8.4, credentials in Secrets Manager |
-| Infrastructure | Terraform, AWS (VPC, ALB, WAF, EC2, Auto Scaling, ECS Fargate, ECR, RDS, KMS, IAM, CloudWatch, SNS, SSM, S3) |
+| Infrastructure | Terraform, AWS (VPC, ALB, WAF, EC2, Auto Scaling, ECS Fargate, ECR, RDS, KMS, IAM, CloudWatch, SNS, Lambda, SSM, S3) |
 | Images | Packer (AMIs), Docker (containers) |
-| CI/CD | GitHub Actions with OIDC, GitHub Environments for approvals |
-| Security scanning | Checkov, Trivy, CodeQL, pip-audit, npm audit, ECR scan on push |
+| CI/CD | GitHub Actions with OIDC, GitHub Environments for approvals, GitHub Flow with branch protection |
+| Notifications | Slack (incoming webhook + GitHub app for Slack) |
+| Security scanning | Checkov, Trivy (code, images, AMIs), CodeQL, pip-audit, npm audit, ECR scan on push |
 
 ---
 
@@ -137,13 +167,19 @@ the load balancer's address.
 ├── infra/terraform/
 │   ├── state-bucket/       S3 bucket for Terraform state (one-time)
 │   ├── bootstrap/          OIDC roles, artifact bucket, ECR repos (one-time)
-│   ├── modules/            network, alb, compute, database, ecs, observability, …
+│   ├── modules/            network, alb, compute, database, ecs, observability,
+│   │                       alarm-slack (CloudWatch alarms → Slack Lambda), …
 │   └── environments/       dev, prod (EC2) · ecs-dev, ecs-prod (ECS)
 ├── tests/
 │   ├── backend/            pytest unit tests
+│   ├── lambda/             unit tests of the alarm-to-Slack function
 │   └── smoke/              post-deployment smoke test
 ├── docs/                   setup, architecture, runbook, checklists
-└── .github/workflows/      CI, deploy, bootstrap and destroy pipelines
+└── .github/
+    ├── workflows/          CI, deploy, bootstrap and destroy pipelines
+    ├── actions/            shared steps: setup-hashicorp (retrying installs),
+    │                       slack-notify
+    └── pull_request_template.md
 ```
 
 ---
@@ -189,18 +225,21 @@ npm ci && npm run lint && npm run test:ci && npm run build
 
 ```mermaid
 flowchart LR
-    pr[Pull request] --> ci[CI<br/>tests + security scans]
-    push[Push to main] --> ci2[CI] --> build[Build release<br/>EC2: Packer AMIs · ECS: Docker images]
+    branch[feature branch] --> pr[Pull request<br/>CI + plan preview]
+    pr --> gate{{Manual approval}} --> merge[Squash merge<br/>to main]
+    merge --> ci2[CI] --> build[Build release<br/>EC2: Packer AMIs + Trivy<br/>ECS: Docker images + scans]
     build --> dev[Deploy dev<br/>+ smoke tests]
-    dev --> approve{{Approval}} --> prod[Deploy prod<br/>+ smoke tests]
+    dev -->|fail| rb[Automatic rollback<br/>to last good release]
+    dev --> approve{{Prod approval<br/>GitHub or Slack}} --> prod[Deploy prod<br/>+ smoke tests]
+    dev & prod & rb -.-> slack([Slack])
 ```
 
 | Workflow | When | What it does |
 |---|---|---|
-| `ci.yml` | Every pull request (and before every deploy) | Lint, tests, Terraform checks, Checkov, Trivy, CodeQL, dependency audits, read-only plans |
+| `ci.yml` | Every pull request (and before every deploy) | Lint, tests, Terraform checks, Checkov, Trivy, CodeQL, dependency audits, read-only plans, and the **Manual approval** gate on pull requests |
 | `deploy-ec2.yml` | Push to `main` (except docs-only changes) or manual | Builds the AMIs with Packer, deploys EC2 dev, then prod after approval |
-| `deploy-ecs.yml` | Push to `main` (except docs-only changes) or manual | Builds images, deploys ECS dev, then prod after approval |
-| `bootstrap.yml` | Manual, once | Creates the state bucket, OIDC roles, artifact bucket and ECR repos |
+| `deploy-ecs.yml` | Push to `main` (except docs-only changes) or manual | Builds and scans the Docker images, deploys ECS dev, then prod after approval |
+| `bootstrap.yml` | Manual (once, and after changes to `infra/terraform/bootstrap`) | Creates the state bucket, OIDC roles, artifact bucket and ECR repos |
 | `destroy.yml` | Manual | Removes one environment (typed confirmation; prod needs approval) |
 
 **Choose where to deploy** with the repository variable `DEPLOY_TARGET`:
@@ -213,6 +252,34 @@ flowchart LR
 
 Running a deploy workflow manually always deploys to its own platform.
 
+**What the pipeline does for you**
+
+| Feature | How it works |
+|---|---|
+| Automatic rollback | If the rollout or the smoke tests fail, the previous good release (recorded in SSM) is redeployed and smoke-tested; the run still fails, so prod is never reached |
+| Docs-only changes skip deploys | Pushes that only touch `*.md`, `docs/`, `LICENSE` or `.gitignore` don't start a deployment |
+| Retrying tool installs | Terraform and Packer are installed by `.github/actions/setup-hashicorp`: up to 6 retries on download errors, checksum-verified |
+| AMI vulnerability gate | Packer scans each AMI with Trivy before saving it and fails on CRITICAL vulnerabilities that have a fix |
+| One build per platform | Deploy EC2 builds only AMIs, Deploy ECS only images (and builds them for a rollback to a release that was only on EC2) |
+| Database parameter changes | Static RDS parameters are applied by a one-time reboot during the deploy, before the smoke tests |
+| Slack notifications | Deploy results, prod waiting for approval (with the plan summary), rollbacks, early failures and Destroy results |
+
+### Everyday workflow (GitHub Flow)
+
+```bash
+git switch main && git pull
+git switch -c feature/short-name
+# edit, then:
+git add -A && git commit -m "Describe the change"
+git push -u origin feature/short-name
+```
+
+On GitHub: **Compare & pull request** → wait for the checks → approve the
+**Manual approval** job (*Review deployments*) → **Squash and merge**. The
+merge deploys dev; prod waits for approval, in GitHub or from Slack.
+`main` is protected by a ruleset: pull request required, required status
+checks, no force pushes. See [docs/setup.md](docs/setup.md).
+
 ---
 
 ## Deploying to AWS
@@ -223,8 +290,9 @@ Full step-by-step guide: **[docs/setup.md](docs/setup.md)**. In short:
    bootstrap role (trust policy and permissions in
    [`docs/bootstrap-role-trust-policy.json`](docs/bootstrap-role-trust-policy.json)
    and [`docs/bootstrap-role-policy.json`](docs/bootstrap-role-policy.json)).
-2. **GitHub environments** — create `dev` and `prod` (prod: required reviewer,
-   `main` only, variable `AWS_BOOTSTRAP_ROLE_ARN`).
+2. **GitHub environments** — create `dev`, `prod` (required reviewer, `main`
+   only, variable `AWS_BOOTSTRAP_ROLE_ARN`) and `pr-approval` (required
+   reviewer, any branch) for the pull request approval gate.
 3. **Bootstrap** — run *Actions → Bootstrap AWS account*, first as a plan, then
    with **apply**. It creates the state bucket, the pipeline roles, the
    artifact bucket and the ECR repositories.
@@ -235,8 +303,14 @@ Full step-by-step guide: **[docs/setup.md](docs/setup.md)**. In short:
    | Repository | `AWS_REGION`, `AWS_PLAN_ROLE_ARN`, `AWS_BUILD_ROLE_ARN`, `ARTIFACT_BUCKET`, optional `DEPLOY_TARGET` |
    | `dev` and `prod` environments | `AWS_DEPLOY_ROLE_ARN` |
 
-5. **Deploy** — push to `main`, or run *Deploy EC2* / *Deploy ECS* manually.
-   The app URL is shown in the run summary.
+5. **Slack (optional)** — add the repository secret `SLACK_WEBHOOK_URL`
+   (a Slack incoming webhook) and, to approve prod from Slack, install the
+   GitHub app for Slack and run
+   `/github subscribe ngems1/3tier-app pulls deployments` in your channel.
+6. **Branch protection** — ruleset on `main`: pull request required, required
+   status checks (including `Manual approval`), no force pushes.
+7. **Deploy** — merge a pull request, or run *Deploy EC2* / *Deploy ECS*
+   manually. The app URL is shown in the run summary and in Slack.
 
 **Rollback:** automatic when a deploy's rollout or smoke tests fail — the
 pipeline puts the previous good release back and smoke-tests it. To roll back
@@ -257,13 +331,17 @@ and type the stack name (`dev`, `prod`, `ecs-dev` or `ecs-prod`) to confirm.
 - **No long-lived AWS keys** — GitHub Actions uses OIDC; each role trusts only
   this repository and, for deploy roles, only its GitHub Environment.
 - **Least privilege** — separate plan (read-only), build and per-environment
-  deploy roles; separate runtime roles per tier; only the API can read the
-  database secret.
+  deploy roles; IAM, Lambda and bucket permissions limited to
+  `cloudbatch818-three-tier-*` resources; separate runtime roles per tier;
+  only the API can read the database secret.
 - **Private by default** — only the public load balancer accepts internet
   traffic; servers and containers live in private subnets; the database has no
   internet route. No SSH (EC2 access through SSM Session Manager).
 - **Encryption** — KMS keys per environment for RDS, secrets, logs and alerts;
-  encrypted EBS and S3; TLS to the database is required.
+  encrypted EBS and S3; TLS to the database is required and the server
+  certificate is verified against the RDS CA.
+- **Secrets stay out of code** — the Slack webhook lives in a GitHub secret and
+  an encrypted SSM parameter, never in Terraform code, plans or state.
 - **Edge protection** — AWS WAF with AWS managed rules (common threats, known
   bad inputs including Log4j, IP reputation).
 - **Supply chain** — pinned dependencies and security gates that block a
@@ -276,7 +354,9 @@ and type the stack name (`dev`, `prod`, `ecs-dev` or `ecs-prod`) to confirm.
 - CloudWatch dashboards per environment (requests, errors, latency, CPU,
   memory, capacity, database).
 - Alarms for unhealthy targets, 5XX errors, p95 latency, CPU, memory,
-  capacity and RDS health, sent to SNS (email optional).
+  capacity and RDS health, sent to SNS and forwarded to **Slack** by a small
+  Lambda function per environment (email optional).
+- Pipeline events (deploys, approvals, rollbacks, failures) in Slack.
 - Centralized logs with per-environment retention; ALB access logs in S3;
   WAF and VPC flow logs.
 
@@ -291,6 +371,23 @@ and type the stack name (`dev`, `prod`, `ecs-dev` or `ecs-prod`) to confirm.
 | [docs/runbook.md](docs/runbook.md) | Operations: access, incidents, scaling, rollback, destroy |
 | [docs/release-checklist.md](docs/release-checklist.md) | What to check before and after a production release |
 | [docs/plan-alignment.md](docs/plan-alignment.md) | How the repository maps to the project plan |
+
+---
+
+## Recent improvements
+
+| Area | Change |
+|---|---|
+| Workflow | GitHub Flow: pull request template, **Manual approval** gate (self-approval through the `pr-approval` environment), branch protection on `main` |
+| Deployments | Automatic rollback to the last good release when the rollout or smoke tests fail |
+| Deployments | Documentation-only pushes no longer deploy |
+| Deployments | Deploy EC2 builds only the Packer AMIs; Deploy ECS builds the images (also for rollbacks) |
+| Reliability | Terraform and Packer installs retry on download errors (shared `setup-hashicorp` action) |
+| Security | Trivy scan of every AMI before it is saved; build fails on fixable CRITICAL vulnerabilities |
+| Security | Lambda permissions of the deploy role limited to project functions |
+| Notifications | Slack messages for deploys, prod approvals, rollbacks, failures and Destroy; CloudWatch alarms to Slack; approvals from Slack with the GitHub app |
+| Network | Stacks can be built inside an existing VPC (`existing_vpc_id`) when the VPC quota is full |
+| Database | RDS certificate verified correctly (`ssl_ca`), `skip_name_resolve`, higher `max_connect_errors`, automatic reboot for pending parameters, API retries the database in the background |
 
 ---
 
