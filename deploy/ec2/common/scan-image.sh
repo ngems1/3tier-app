@@ -26,13 +26,20 @@ gpgkey=https://aquasecurity.github.io/trivy-repo/rpm/public.key
 REPO
 dnf -y install trivy
 
-cache=/tmp/trivy-cache
+# /tmp on Amazon Linux 2023 is a RAM disk (about half the instance memory),
+# too small for the Trivy database: keep Trivy's cache and temporary files on
+# the root volume instead, and delete them before the image is saved.
+work=/var/tmp/trivy
+cache="${work}/cache"
+export TMPDIR="${work}/tmp"
+mkdir -p "${cache}" "${TMPDIR}"
 cleanup() {
   dnf -y remove trivy >/dev/null 2>&1 || true
   rm -f /etc/yum.repos.d/trivy.repo
-  rm -rf "${cache}"
+  rm -rf "${work}"
 }
 trap cleanup EXIT
+echo "Free space for the scan: $(df -h --output=avail /var/tmp | tail -1 | tr -d ' ')"
 
 echo "==> Downloading the vulnerability database"
 for attempt in 1 2 3 4 5; do
@@ -51,7 +58,7 @@ scan() {
   trivy rootfs --cache-dir "${cache}" --skip-db-update --skip-java-db-update \
     --scanners vuln --ignore-unfixed --no-progress \
     --skip-dirs /proc --skip-dirs /sys --skip-dirs /dev --skip-dirs /run \
-    --skip-dirs "${cache}" "$@" /
+    --skip-dirs "${work}" "$@" /
 }
 
 echo "==> Vulnerabilities in this image (HIGH and CRITICAL, fix available)"
