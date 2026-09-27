@@ -266,8 +266,10 @@ and type the stack name (`dev`, `prod`, `ecs-dev` or `ecs-prod`) to confirm.
   encrypted EBS and S3; TLS to the database is required.
 - **Edge protection** — AWS WAF with AWS managed rules (common threats, known
   bad inputs including Log4j, IP reputation).
-- **Supply chain** — pinned dependencies, image scanning, and security gates
-  that block a release on critical findings.
+- **Supply chain** — pinned dependencies and security gates that block a
+  release on critical findings: Trivy scans the code (every change), the
+  Docker images (ECS) and each AMI before it is saved (EC2), plus ECR's scan
+  on push.
 
 ## Observability
 

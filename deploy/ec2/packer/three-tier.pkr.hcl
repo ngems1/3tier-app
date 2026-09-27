@@ -6,6 +6,10 @@
 # with Version=<commit SHA>. Terraform selects AMIs by that tag, so a deploy
 # or rollback is just "use the AMIs for version X".
 #
+# Before an image is saved, Trivy scans it (Amazon Linux packages and the
+# application's dependencies) and the build fails on CRITICAL vulnerabilities
+# that have a fix available (common/scan-image.sh).
+#
 #   packer init  deploy/ec2/packer
 #   packer build -var app_version=$(git rev-parse HEAD) -only 'amazon-ebs.app' deploy/ec2/packer
 #   packer build -var app_version=$(git rev-parse HEAD) -only 'amazon-ebs.web' deploy/ec2/packer
@@ -45,6 +49,12 @@ variable "project" {
 variable "instance_type" {
   type    = string
   default = "t3.small"
+}
+
+variable "security_scan" {
+  type        = bool
+  default     = true
+  description = "Scan the image with Trivy before saving it and fail on CRITICAL vulnerabilities (common/scan-image.sh)"
 }
 
 variable "subnet_id" {
@@ -165,11 +175,13 @@ build {
     environment_vars = [
       "APP_VERSION=${var.app_version}",
       "TIER=${source.name}",
+      "TRIVY_SCAN=${var.security_scan}",
     ]
     inline = [
       "set -euo pipefail",
       "bash /tmp/build/harden.sh",
       "bash /tmp/build/provision-$TIER.sh",
+      "bash /tmp/build/scan-image.sh",
       "bash /tmp/build/finalize.sh",
     ]
   }
