@@ -140,10 +140,12 @@ jobs:
             exit 1
           fi
 
-      # Turns off deletion protection on the load balancers and database. It
-      # changes nothing in dev, where protection is already off.
-      - name: Remove deletion protection
-        if: steps.state.outputs.resources != '0'
+      # Turns off deletion protection on the load balancers and database.
+      # Prod only: dev never has it, and a targeted apply there would try to
+      # create anything missing from the state (for example after a deploy
+      # was stopped halfway).
+      - name: Remove deletion protection (prod)
+        if: steps.state.outputs.resources != '0' && inputs.environment == 'prod'
         run: |
           terraform -chdir="$TF_DIR" apply -input=false -auto-approve \
             -var "app_version=${{ steps.version.outputs.version }}" -var allow_destroy=true \
