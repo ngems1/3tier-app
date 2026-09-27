@@ -48,6 +48,24 @@ tests/smoke/smoke_test.sh <app_url> <expected-sha>   # app_url = terraform outpu
 It checks the HTTP→HTTPS redirect, web health, the React app, API readiness
 (including the database), the task list, and the deployed version.
 
+## Destroy guard
+
+Every deploy plan is checked before it can be applied: if it would **delete or
+replace** an `aws_db_instance`, an `aws_lb` or an `aws_kms_key`, the plan job
+fails with "Destroy guard", the run summary lists the resources, Slack reports
+the failure, and nothing is applied. Pull request plan previews show the same
+finding as a warning.
+
+What to do:
+
+1. Read the plan: a replacement usually comes from changing an attribute that
+   can't be updated in place (engine, storage type, subnet group, load
+   balancer name...). Often the change can be written differently.
+2. If it really is intended (for example a planned database migration), take
+   a manual snapshot first, then run **Deploy EC2/ECS → Run workflow** for that
+   environment with **allow_destructive** ticked. Prod still needs its
+   approval.
+
 ## Rollback
 
 **Application rollback (the usual case).** Redeploy the last known-good release:

@@ -178,7 +178,7 @@ reports `database: down`).
 └── .github/
     ├── workflows/          CI, deploy, bootstrap and destroy pipelines
     ├── actions/            shared steps: setup-hashicorp (retrying installs),
-    │                       slack-notify
+    │                       slack-notify, destroy-guard
     └── pull_request_template.md
 ```
 
@@ -256,6 +256,7 @@ Running a deploy workflow manually always deploys to its own platform.
 
 | Feature | How it works |
 |---|---|
+| Destroy guard | A plan that would delete or replace a database, load balancer or KMS key stops the deploy before anything is applied (and shows a warning on the pull request); override deliberately with the manual-run option **allow_destructive** |
 | Automatic rollback | If the rollout or the smoke tests fail, the previous good release (recorded in SSM) is redeployed and smoke-tested; the run still fails, so prod is never reached |
 | Docs-only changes skip deploys | Pushes that only touch `*.md`, `docs/`, `LICENSE` or `.gitignore` don't start a deployment |
 | Retrying tool installs | Terraform and Packer are installed by `.github/actions/setup-hashicorp`: up to 6 retries on download errors, checksum-verified |
@@ -380,6 +381,7 @@ and type the stack name (`dev`, `prod`, `ecs-dev` or `ecs-prod`) to confirm.
 |---|---|
 | Workflow | GitHub Flow: pull request template, **Manual approval** gate (self-approval through the `pr-approval` environment), branch protection on `main` |
 | Deployments | Automatic rollback to the last good release when the rollout or smoke tests fail |
+| Deployments | Destroy guard: plans that delete or replace the database, load balancers or KMS key are blocked unless explicitly allowed |
 | Deployments | Documentation-only pushes no longer deploy |
 | Deployments | Deploy EC2 builds only the Packer AMIs; Deploy ECS builds the images (also for rollbacks) |
 | Reliability | Terraform and Packer installs retry on download errors (shared `setup-hashicorp` action) |

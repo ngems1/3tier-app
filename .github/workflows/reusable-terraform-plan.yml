@@ -21,6 +21,11 @@ on:
         description: Release (commit SHA) to deploy
         type: string
         required: true
+      allow_destructive:
+        description: Let the plan delete or replace a database, load balancer or KMS key
+        type: boolean
+        required: false
+        default: false
     secrets:
       SLACK_WEBHOOK_URL:
         required: false
@@ -72,6 +77,15 @@ jobs:
             tail -c 60000 plan.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Stops here (nothing uploaded, nothing applied) if the plan would delete
+      # or replace a database, load balancer or KMS key.
+      - uses: ./.github/actions/destroy-guard
+        with:
+          plan-dir: ${{ env.TF_DIR }}
+          stack: ${{ inputs.platform }} ${{ inputs.environment }}
+          mode: fail
+          allow: ${{ inputs.allow_destructive }}
 
       - uses: actions/upload-artifact@v7
         with:

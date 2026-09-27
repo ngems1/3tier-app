@@ -276,7 +276,7 @@ jobs:
         if: steps.deployed.outputs.version != ''
         run: |
           terraform -chdir="$TF_DIR" init -input=false
-          terraform -chdir="$TF_DIR" plan -input=false -lock=false -no-color \
+          terraform -chdir="$TF_DIR" plan -input=false -lock=false -no-color -out=tfplan \
             -var "app_version=${{ steps.deployed.outputs.version }}" | tee plan.txt
           {
             echo "### Terraform plan: ${{ matrix.stack }}"
@@ -284,6 +284,16 @@ jobs:
             tail -c 60000 plan.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # Warns on the pull request if merging would delete or replace a
+      # database, load balancer or KMS key (the deploy would then stop there).
+      - name: Destroy guard (warning only)
+        if: steps.deployed.outputs.version != ''
+        uses: ./.github/actions/destroy-guard
+        with:
+          plan-dir: ${{ env.TF_DIR }}
+          stack: ${{ matrix.stack }}
+          mode: warn
 
   # Self-approval gate. GitHub never lets the author approve their own pull
   # request, but a required reviewer of an Environment can approve a job that

@@ -1,0 +1,89 @@
+# Destroy guard: stops a Terraform plan that would delete or replace the
+# resources whose loss hurts most:
+#   aws_db_instance  the database and its data
+#   aws_lb           the load balancers (a new one means a new app URL)
+#   aws_kms_key      the encryption key (encrypted data becomes unreadable)
+#
+#   - uses: ./.github/actions/destroy-guard   (after terraform plan -out=...)
+#     with:
+#       plan-dir: infra/terraform/environments/dev
+#       stack: dev
+#       mode: fail          # fail (deploys) or warn (pull request previews)
+#       allow: "false"      # "true" = deliberate, approved destructive change
+#
+# Planned replacements of other resources (instances, launch templates,
+# parameter groups...) are normal and aren't blocked.
+
+name: Destroy guard
+description: Fail (or warn) when a Terraform plan deletes or replaces a database, load balancer or KMS key.
+
+inputs:
+  plan-dir:
+    description: Terraform root module directory
+    required: true
+  plan-file:
+    description: Saved plan file, relative to plan-dir
+    required: false
+    default: tfplan
+  stack:
+    description: Stack name shown in messages
+    required: true
+  mode:
+    description: fail or warn
+    required: false
+    default: fail
+  allow:
+    description: '"true" lets a destructive plan through (with a warning)'
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Destroy guard (${{ inputs.stack }})
+      shell: bash
+      env:
+        PLAN_DIR: ${{ inputs.plan-dir }}
+        PLAN_FILE: ${{ inputs.plan-file }}
+        STACK: ${{ inputs.stack }}
+        MODE: ${{ inputs.mode }}
+        ALLOW: ${{ inputs.allow }}
+      run: |
+        set -euo pipefail
+        risky=$(terraform -chdir="${PLAN_DIR}" show -json "${PLAN_FILE}" | jq -r '
+          [ .resource_changes[]?
+            | select(.type == "aws_db_instance" or .type == "aws_lb" or .type == "aws_kms_key")
+            | select(.change.actions | index("delete"))
+            | "- `\(.address)`: \(if (.change.actions | index("create")) then "REPLACE" else "DELETE" end)"
+          ] | .[]')
+
+        if [ -z "${risky}" ]; then
+          echo "Destroy guard: ${STACK} plan deletes or replaces no database, load balancer or KMS key."
+          echo "- Destroy guard: :white_check_mark: no database, load balancer or KMS key is deleted or replaced." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        {
+          echo "### :warning: Destroy guard: ${STACK}"
+          echo "This plan would delete or replace:"
+          echo "${risky}"
+          echo
+        } >> "$GITHUB_STEP_SUMMARY"
+        echo "${risky}"
+
+        if [ "${MODE}" = "warn" ]; then
+          echo "::warning title=Destroy guard (${STACK})::This change would delete or replace a database, load balancer or KMS key. Check the plan before merging."
+          echo "Merging this change will make the deploy stop at this check unless it is run manually with **allow_destructive**." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        if [ "${ALLOW}" = "true" ]; then
+          echo "::warning title=Destroy guard (${STACK})::Destructive changes allowed by allow_destructive for this run."
+          echo "Allowed for this run (**allow_destructive** was set)." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        echo "::error title=Destroy guard (${STACK})::The plan would delete or replace a database, load balancer or KMS key. Nothing was applied."
+        {
+          echo "**Nothing was applied.** If this is intended (for example a planned database migration with a backup),"
+          echo "run the deploy workflow manually for this environment with **allow_destructive** ticked."
+        } >> "$GITHUB_STEP_SUMMARY"
+        exit 1

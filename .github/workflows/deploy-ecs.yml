@@ -46,6 +46,11 @@ on:
         type: string
         required: false
         default: ""
+      allow_destructive:
+        description: Allow deleting or replacing the database, load balancers or KMS key (destroy guard override)
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -124,6 +129,7 @@ jobs:
       platform: ecs
       environment: dev
       version: ${{ inputs.version || github.sha }}
+      allow_destructive: ${{ inputs.allow_destructive == true }}
     permissions:
       contents: read
       id-token: write
@@ -165,6 +171,7 @@ jobs:
       platform: ecs
       environment: prod
       version: ${{ inputs.version || github.sha }}
+      allow_destructive: ${{ inputs.allow_destructive == true }}
     permissions:
       contents: read
       id-token: write
