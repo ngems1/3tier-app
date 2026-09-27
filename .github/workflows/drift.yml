@@ -1,0 +1,170 @@
+# Nightly drift check: a read-only Terraform plan of every deployed
+# environment (EC2 dev/prod, ECS dev/prod) against the code on main and the
+# release each one runs. Nothing is ever changed.
+#
+#   no differences          -> green, no message
+#   differences found       -> red + Slack: either someone changed AWS by hand
+#                              (console, CLI), or main has infrastructure
+#                              changes not deployed there yet (e.g. prod still
+#                              waiting for approval)
+#   plan failed             -> red + Slack
+#
+# Environments that don't exist (never deployed, or destroyed) are skipped.
+# Runs every morning, and on demand from Actions > Drift check > Run workflow.
+# Uses the read-only plan role, with -lock=false so it never blocks a deploy.
+
+name: Drift check
+
+on:
+  schedule:
+    - cron: "47 10 * * *" # 10:47 UTC, about 6:47 AM in New York
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: drift-check
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: "1.16.4"
+
+jobs:
+  drift:
+    name: Drift (${{ matrix.stack }})
+    if: vars.AWS_PLAN_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - stack: dev
+            project: cloudbatch818-three-tier
+            environment: dev
+          - stack: prod
+            project: cloudbatch818-three-tier
+            environment: prod
+          - stack: ecs-dev
+            project: cloudbatch818-three-tier-ecs
+            environment: dev
+          - stack: ecs-prod
+            project: cloudbatch818-three-tier-ecs
+            environment: prod
+    env:
+      TF_DIR: infra/terraform/environments/${{ matrix.stack }}
+      STACK: ${{ matrix.stack }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - uses: ./.github/actions/setup-hashicorp
+        with:
+          tool: terraform
+          version: ${{ env.TF_VERSION }}
+
+      - name: terraform init
+        run: terraform -chdir="$TF_DIR" init -input=false
+
+      # An empty state means the environment doesn't exist: nothing to check.
+      - name: Is this environment deployed?
+        id: deployed
+        run: |
+          count=$(terraform -chdir="$TF_DIR" state list 2>/dev/null | wc -l)
+          if [ "${count}" -eq 0 ]; then
+            echo "::notice::${STACK} is not deployed; skipping."
+            echo "${STACK}: not deployed, skipped." >> "$GITHUB_STEP_SUMMARY"
+            echo "version=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          version=$(terraform -chdir="$TF_DIR" output -raw deployed_version 2>/dev/null || true)
+          [ -n "${version}" ] || version=$(aws ssm get-parameter \
+            --name "/${{ matrix.project }}/${{ matrix.environment }}/deployed-version" \
+            --query Parameter.Value --output text 2>/dev/null || true)
+          if [ -z "${version}" ]; then
+            echo "::error::${STACK} has ${count} resources but its deployed release couldn't be found."
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "${STACK}: ${count} resources, release ${version}"
+
+      - name: Plan (read-only)
+        id: plan
+        if: steps.deployed.outputs.version != ''
+        env:
+          VERSION: ${{ steps.deployed.outputs.version }}
+        run: |
+          set +e
+          terraform -chdir="$TF_DIR" plan -input=false -lock=false -no-color \
+            -detailed-exitcode -var "app_version=${VERSION}" > plan.txt 2>&1
+          code=$?
+          set -e
+          cat plan.txt
+
+          case "${code}" in
+            0) status=clean ;;
+            2) status=drift ;;
+            *) status=error ;;
+          esac
+          outside=false
+          grep -q "changed outside of Terraform" plan.txt && outside=true
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+          echo "outside=${outside}" >> "$GITHUB_OUTPUT"
+
+          {
+            case "${status}" in
+              clean) echo "### ${STACK}: no drift :white_check_mark:" ;;
+              drift) echo "### ${STACK}: differences found :warning:" ;;
+              error) echo "### ${STACK}: plan failed :x:" ;;
+            esac
+            if [ "${status}" != clean ]; then
+              if [ "${outside}" = true ]; then
+                echo "Some resources were changed outside Terraform (console, CLI or another tool)."
+              elif [ "${status}" = drift ]; then
+                echo "main has infrastructure changes that aren't deployed to ${STACK} yet."
+              fi
+              echo
+              echo "**Details:**"
+              echo '```'
+              grep -E '^  # .* (will be|must be|has changed|has been)' plan.txt | sed 's/^  # //' | head -50 || true
+              grep -E '^(Plan:|Error:)' plan.txt || true
+              echo '```'
+              echo "<details><summary>Full plan</summary>"
+              echo
+              echo '```'
+              tail -c 50000 plan.txt
+              echo '```'
+              echo "</details>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${status}" = error ]; then
+            echo "::error::Terraform plan failed for ${STACK}."
+            exit 1
+          fi
+          if [ "${status}" = drift ]; then
+            echo "::error::${STACK} doesn't match the code on main (see the run summary)."
+            exit 1
+          fi
+
+      - name: Notify Slack
+        if: failure()
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: >-
+            ${{ steps.plan.outputs.status == 'drift' && ':warning:' || ':x:' }}
+            *Drift check ${{ env.STACK }}*:
+            ${{ steps.plan.outputs.status == 'drift'
+              && (steps.plan.outputs.outside == 'true'
+                && 'resources were changed outside Terraform (console/CLI).'
+                || 'main has infrastructure changes not deployed here yet.')
+              || 'the check failed.' }}
+            <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Details>

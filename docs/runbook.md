@@ -66,7 +66,28 @@ What to do:
    environment with **allow_destructive** ticked. Prod still needs its
    approval.
 
-## Rollback
+## Drift check
+
+**Drift check** (`drift.yml`) runs every morning and on demand (**Actions →
+Drift check → Run workflow**). For each environment that exists it runs a
+read-only `terraform plan` against the code on `main` and the release that
+environment runs. It never changes anything and doesn't take the state lock.
+
+- Green: AWS matches the code. Environments that don't exist are skipped.
+- Red with "changed outside Terraform": someone changed a resource by hand
+  (console, CLI). The run summary lists the resources.
+- Red with "not deployed here yet": `main` has infrastructure changes this
+  environment doesn't have yet, usually prod waiting for approval.
+
+What to do:
+
+1. Read the run summary to see which resources differ and how.
+2. A manual change you want to keep: put it in the Terraform code and deploy.
+   One you don't want: redeploy the environment (**Deploy EC2/ECS → Run
+   workflow**, same `version` as now), which puts the resources back to what
+   the code says.
+3. Changes not deployed yet: approve the pending prod deploy, or deploy it.
+
 
 **Application rollback (the usual case).** Redeploy the last known-good release:
 

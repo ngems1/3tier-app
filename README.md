@@ -46,8 +46,8 @@ delivered by GitHub Actions. The same app can run on **EC2** (Project 1) or on
   alarms from every environment (through a small Lambda function). With the
   GitHub app for Slack, prod can be approved from Slack.
 - **Operations built in** — CloudWatch logs, metrics, alarms and dashboards,
-  one-click rollback to any previous release, and a Destroy workflow to remove
-  an environment when you're done.
+  one-click rollback to any previous release, a nightly drift check, and a
+  Destroy workflow to remove an environment when you're done.
 
 ---
 
@@ -241,6 +241,7 @@ flowchart LR
 | `deploy-ecs.yml` | Push to `main` (except docs-only changes) or manual | Builds and scans the Docker images, deploys ECS dev, then prod after approval |
 | `bootstrap.yml` | Manual (once, and after changes to `infra/terraform/bootstrap`) | Creates the state bucket, OIDC roles, artifact bucket and ECR repos |
 | `destroy.yml` | Manual | Removes one environment (typed confirmation; prod needs approval) |
+| `drift.yml` | Every morning (and manual) | Read-only plan of every deployed environment; Slack alert if AWS no longer matches the code |
 
 **Choose where to deploy** with the repository variable `DEPLOY_TARGET`:
 
@@ -256,6 +257,7 @@ Running a deploy workflow manually always deploys to its own platform.
 
 | Feature | How it works |
 |---|---|
+| Nightly drift check | Every morning a read-only plan compares each deployed environment with the code on `main`; changes made by hand in the console (or infrastructure changes not deployed yet) turn the run red and post to Slack |
 | Destroy guard | A plan that would delete or replace a database, load balancer or KMS key stops the deploy before anything is applied (and shows a warning on the pull request); override deliberately with the manual-run option **allow_destructive** |
 | Automatic rollback | If the rollout or the smoke tests fail, the previous good release (recorded in SSM) is redeployed and smoke-tested; the run still fails, so prod is never reached |
 | Docs-only changes skip deploys | Pushes that only touch `*.md`, `docs/`, `LICENSE` or `.gitignore` don't start a deployment |
@@ -263,7 +265,7 @@ Running a deploy workflow manually always deploys to its own platform.
 | AMI vulnerability gate | Packer scans each AMI with Trivy before saving it and fails on CRITICAL vulnerabilities that have a fix |
 | One build per platform | Deploy EC2 builds only AMIs, Deploy ECS only images (and builds them for a rollback to a release that was only on EC2) |
 | Database parameter changes | Static RDS parameters are applied by a one-time reboot during the deploy, before the smoke tests |
-| Slack notifications | Deploy results, prod waiting for approval (with the plan summary), rollbacks, early failures and Destroy results |
+| Slack notifications | Deploy results, prod waiting for approval (with the plan summary), rollbacks, early failures, Destroy results and drift alerts |
 
 ### Everyday workflow (GitHub Flow)
 
@@ -410,6 +412,7 @@ changes don't); set `DEPLOY_TARGET` to the other platform to avoid that.
 | Deployments | Automatic rollback to the last good release when the rollout or smoke tests fail |
 | Deployments | Destroy guard: plans that delete or replace the database, load balancers or KMS key are blocked unless explicitly allowed |
 | Deployments | Documentation-only pushes no longer deploy |
+| Operations | Nightly drift check of every deployed environment, with Slack alerts |
 | Deployments | Deploy EC2 builds only the Packer AMIs; Deploy ECS builds the images (also for rollbacks) |
 | Reliability | Terraform and Packer installs retry on download errors (shared `setup-hashicorp` action) |
 | Security | Trivy scan of every AMI before it is saved; build fails on fixable CRITICAL vulnerabilities |
