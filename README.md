@@ -436,6 +436,7 @@ changes don't); set `DEPLOY_TARGET` to the other platform to avoid that.
 | Area | Change |
 |---|---|
 | Workflow | GitHub Flow: pull request template, **Manual approval** gate (self-approval through the `pr-approval` environment), branch protection on `main` |
+| Workflow | Ruleset `protect-main` enforced: every change reaches `main` through a pull request with passing checks and an approval |
 | Deployments | Automatic rollback to the last good release when the rollout or smoke tests fail |
 | Deployments | Destroy guard: plans that delete or replace the database, load balancers or KMS key are blocked unless explicitly allowed |
 | Deployments | Documentation-only pushes no longer deploy |
