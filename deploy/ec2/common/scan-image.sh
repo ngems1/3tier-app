@@ -41,18 +41,28 @@ cleanup() {
 trap cleanup EXIT
 echo "Free space for the scan: $(df -h --output=avail /var/tmp | tail -1 | tr -d ' ')"
 
-echo "==> Downloading the vulnerability database"
-for attempt in 1 2 3 4 5; do
-  if trivy image --download-db-only --cache-dir "${cache}" --quiet; then
-    break
-  fi
-  if [ "${attempt}" = 5 ]; then
-    echo "Could not download the Trivy database after 5 attempts" >&2
-    exit 1
-  fi
-  echo "Database download failed (attempt ${attempt}/5); retrying in 20 s"
-  sleep 20
-done
+# Download both databases up front, with retries, so a network blip doesn't
+# fail the bake. The Java database is needed as soon as the image contains
+# any .jar file (Trivy refuses to skip it on the first run).
+download() {
+  local what="$1"
+  shift
+  echo "==> Downloading the ${what}"
+  for attempt in 1 2 3 4 5; do
+    if trivy image "$@" --cache-dir "${cache}" --quiet; then
+      return 0
+    fi
+    if [ "${attempt}" = 5 ]; then
+      echo "Could not download the ${what} after 5 attempts" >&2
+      exit 1
+    fi
+    echo "Download failed (attempt ${attempt}/5); retrying in 20 s"
+    sleep 20
+  done
+}
+download "vulnerability database" --download-db-only
+download "Java vulnerability database" --download-java-db-only
+echo "Free space after the downloads: $(df -h --output=avail /var/tmp | tail -1 | tr -d ' ')"
 
 scan() {
   trivy rootfs --cache-dir "${cache}" --skip-db-update --skip-java-db-update \

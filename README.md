@@ -318,8 +318,35 @@ pipeline puts the previous good release back and smoke-tests it. To roll back
 by hand, run *Deploy EC2* or *Deploy ECS* manually with the previous commit
 SHA as `version` — nothing is rebuilt.
 
-**Clean up:** run *Actions → Destroy*, choose the platform and environment,
-and type the stack name (`dev`, `prod`, `ecs-dev` or `ecs-prod`) to confirm.
+### Removing an environment (Destroy)
+
+Run *Actions → Destroy*, choose the platform and environment, and type the
+stack name (`dev`, `prod`, `ecs-dev` or `ecs-prod`) to confirm.
+
+```mermaid
+flowchart LR
+    confirm[Typed name<br/>matches?] --> approve{{prod only:<br/>approval}} --> wait[Waits for any running<br/>deploy of that platform]
+    wait --> unlock[Turn off deletion<br/>protection] --> plan[Destroy plan<br/>in the run summary] --> destroy[terraform destroy<br/>~10-20 min] --> slack([Slack])
+```
+
+| Removed | Kept (to redeploy later) |
+|---|---|
+| Servers / Auto Scaling groups (EC2) or ECS services and cluster | The shared VPC, its internet gateway and other people's resources |
+| Both load balancers, WAF, access-log bucket | Terraform state bucket and pipeline (OIDC) roles |
+| The database: dev without a backup, **prod after a final snapshot** (`<project>-prod-final`) | Artifact bucket, ECR images and AMIs |
+| The stack's subnets, route tables, NAT gateway and Elastic IP | The Slack webhook parameter |
+| Alarms, dashboard, log groups, SNS topic, alarm-to-Slack Lambda, IAM roles, database secret | Prod's final database snapshot |
+| KMS key (scheduled for deletion after AWS's waiting period) | |
+
+Safety: the typed name must match, prod needs a reviewer's approval, and it
+never runs during a deployment of the same platform. The **destroy guard**
+doesn't apply here on purpose: it protects deploys from deleting the database
+by accident, while Destroy exists to delete it. If a run fails, run it again;
+it only removes what is left. To bring the environment back, run the deploy
+workflow (AMIs and images are reused).
+
+After destroying, a push to `main` that changes code recreates dev (docs-only
+changes don't); set `DEPLOY_TARGET` to the other platform to avoid that.
 
 > **Cost:** an environment is billed by the hour while it exists (NAT gateway,
 > load balancers, RDS, EC2 or Fargate). Destroy test environments when you're
