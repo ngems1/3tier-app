@@ -83,7 +83,7 @@ implemented: Project 1 (EC2) first, then
 | Reachable through the ALB using HTTPS | ACM certificate plus HTTPS listener; the smoke test checks HTTPS and the redirect |
 | Frontend calls the API and persists task data in RDS | Tasks UI → `/api/tasks` → RDS; the smoke test checks readiness (database up) and the task list |
 | EC2 created by Terraform and able to scale through the ASG | `modules/compute` with target-tracking policies |
-| Every PR validated; approved changes deployed from main | `ci.yml` required checks; `deploy.yml` on push to main (calls `deploy-ec2.yml` / `deploy-ecs.yml`) with the prod approval gate |
+| Every PR validated; approved changes deployed from main | `ci.yml` required checks; `deploy-ec2.yml` on push to main with the prod approval gate |
 | No long-lived AWS keys in GitHub | OIDC roles only; no AWS secrets configured |
 | CloudWatch logs, metrics and alarms available | `modules/observability` |
 | Failed deployment can be rolled back with the documented procedure | Automatic refresh rollback, plus redeploy-by-SHA (`docs/runbook.md`) |
