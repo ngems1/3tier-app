@@ -1,6 +1,6 @@
-# Continuous integration: runs on every pull request, and deploy-ec2.yml and
-# deploy-ecs.yml call it on every push to main, so nothing is released without
-# passing it.
+# Continuous integration: runs on every pull request, and deploy.yml calls it
+# once on every push to main (manual Deploy EC2 / Deploy ECS runs call it too),
+# so nothing is released without passing it.
 #
 # Stages (project plan section 4, "Pull Request" and "Security"):
 #   backend    lint (ruff), unit tests (pytest), dependency audit (pip-audit)

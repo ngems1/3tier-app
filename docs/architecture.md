@@ -8,7 +8,8 @@ load balancer, database, KMS key, alarms and Terraform state:
   [Project 2: ECS](#project-2-ecs-on-fargate).
 
 The GitHub variable `DEPLOY_TARGET` (`ec2`, `ecs` or `both`) decides which
-platform each push to `main` deploys to. Manual runs of *Deploy EC2* or
+platform each push to `main` deploys to: the *Deploy* workflow runs CI once
+and then calls the EC2 and/or ECS pipeline, so a push is a single run. Manual runs of *Deploy EC2* or
 *Deploy ECS* always deploy to their own platform.
 
 ## Tiers

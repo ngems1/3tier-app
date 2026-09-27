@@ -145,7 +145,7 @@ admin) create one role by hand, once.
      `main` only, and the environment variable `AWS_BOOTSTRAP_ROLE_ARN` = the
      role ARN from step 2.
 5. Push the repository to `main`. GitHub only offers manual workflows that are
-   on the default branch. The `Deploy EC2` run started by this push fails
+   on the default branch. The `Deploy` run started by this push fails
    because the AWS variables aren't set yet; that's expected.
 
 **Run it:**

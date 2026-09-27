@@ -1,11 +1,12 @@
 # Release and deployment for the ECS project (Project 2): the same application
 # as EC2, running as containers on Amazon ECS (Fargate).
 #
-# Where pushes to main go is set by the GitHub variable DEPLOY_TARGET:
-#   ec2 (default) -> deploy-ec2.yml; ecs -> this workflow; both -> both.
+# Pushes to main don't start this workflow directly: deploy.yml runs CI once
+# and calls this workflow when the GitHub variable DEPLOY_TARGET is ecs or
+# both, so each push shows up as a single "Deploy" run.
 # A manual run always deploys to ECS, whatever DEPLOY_TARGET says.
 #
-# Push to main (DEPLOY_TARGET = ecs or both):
+# Push to main (through deploy.yml, DEPLOY_TARGET = ecs or both):
 #   CI -> build, push and scan container images in ECR (tagged with the SHA)
 #      -> plan ecs-dev -> apply ecs-dev -> wait for the rollout -> smoke test
 #      -> plan ecs-prod -> [GitHub Environment approval] -> apply -> smoke test
@@ -23,16 +24,14 @@
 name: Deploy ECS
 
 on:
-  push:
-    branches: [main]
-    # Documentation-only changes don't deploy. A push that also touches any
-    # other file still deploys as usual.
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - "LICENSE"
-      - ".gitignore"
-      - ".gitattributes"
+  # Called by deploy.yml for pushes to main.
+  workflow_call:
+    inputs:
+      ci_passed:
+        description: CI already passed in the calling workflow, so don't run it again
+        type: boolean
+        required: false
+        default: false
   workflow_dispatch:
     inputs:
       environment:
@@ -61,33 +60,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  target:
-    name: Deploy target
-    runs-on: ubuntu-latest
-    outputs:
-      deploy: ${{ steps.check.outputs.deploy }}
-    steps:
-      - id: check
-        env:
-          TARGET: ${{ vars.DEPLOY_TARGET || 'ec2' }}
-          EVENT: ${{ github.event_name }}
-        run: |
-          case "$TARGET" in
-            ec2|ecs|both) ;;
-            *) echo "::error::DEPLOY_TARGET must be ec2, ecs or both (it is '$TARGET')"; exit 1 ;;
-          esac
-          if [ "$EVENT" = "workflow_dispatch" ] || [ "$TARGET" = "ecs" ] || [ "$TARGET" = "both" ]; then
-            echo "deploy=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "deploy=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::DEPLOY_TARGET is '$TARGET', so pushes to main don't deploy to ECS. Run this workflow manually to deploy to ECS anyway."
-            echo "ECS deployment skipped: DEPLOY_TARGET is \`$TARGET\`." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
   ci:
     name: CI
-    needs: [target]
-    if: needs.target.outputs.deploy == 'true' && inputs.version == ''
+    if: inputs.version == '' && inputs.ci_passed != true
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
@@ -100,10 +75,11 @@ jobs:
   # only ever deployed to EC2 gets its images built from that commit.
   images:
     name: Container images
-    needs: [target, ci]
+    needs: [ci]
     if: >-
-      always() && needs.target.outputs.deploy == 'true' &&
-      (needs.ci.result == 'success' || (needs.ci.result == 'skipped' && inputs.version != ''))
+      !cancelled() &&
+      (needs.ci.result == 'success' ||
+        (needs.ci.result == 'skipped' && (inputs.version != '' || inputs.ci_passed == true)))
     uses: ./.github/workflows/reusable-images.yml
     with:
       version: ${{ inputs.version || github.sha }}

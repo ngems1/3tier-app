@@ -1,7 +1,6 @@
 # AWS 3-Tier Tasks App — EC2 and ECS
 
-[![Deploy EC2](https://github.com/ngems1/3tier-app/actions/workflows/deploy-ec2.yml/badge.svg)](https://github.com/ngems1/3tier-app/actions/workflows/deploy-ec2.yml)
-[![Deploy ECS](https://github.com/ngems1/3tier-app/actions/workflows/deploy-ecs.yml/badge.svg)](https://github.com/ngems1/3tier-app/actions/workflows/deploy-ecs.yml)
+[![Deploy](https://github.com/ngems1/3tier-app/actions/workflows/deploy.yml/badge.svg)](https://github.com/ngems1/3tier-app/actions/workflows/deploy.yml)
 
 A production-style **3-tier web application on AWS**, built with Terraform and
 delivered by GitHub Actions. The same app can run on **EC2** (Project 1) or on
@@ -237,8 +236,9 @@ flowchart LR
 | Workflow | When | What it does |
 |---|---|---|
 | `ci.yml` | Every pull request (and before every deploy) | Lint, tests, Terraform checks, Checkov, Trivy, CodeQL, dependency audits, read-only plans, and the **Manual approval** gate on pull requests |
-| `deploy-ec2.yml` | Push to `main` (except docs-only changes) or manual | Builds the AMIs with Packer, deploys EC2 dev, then prod after approval |
-| `deploy-ecs.yml` | Push to `main` (except docs-only changes) or manual | Builds and scans the Docker images, deploys ECS dev, then prod after approval |
+| `deploy.yml` | Push to `main` (except docs-only changes) | Runs CI once, then the EC2 and/or ECS pipeline chosen by `DEPLOY_TARGET` — one run per push |
+| `deploy-ec2.yml` | Called by `deploy.yml`, or manual (*Deploy EC2*) | Builds the AMIs with Packer, deploys EC2 dev, then prod after approval |
+| `deploy-ecs.yml` | Called by `deploy.yml`, or manual (*Deploy ECS*) | Builds and scans the Docker images, deploys ECS dev, then prod after approval |
 | `bootstrap.yml` | Manual (once, and after changes to `infra/terraform/bootstrap`) | Creates the state bucket, OIDC roles, artifact bucket and ECR repos |
 | `destroy.yml` | Manual | Removes one environment (typed confirmation; prod needs approval) |
 
@@ -250,7 +250,9 @@ flowchart LR
 | `ecs` | ECS |
 | `both` | EC2 and ECS |
 
-Running a deploy workflow manually always deploys to its own platform.
+Each push starts a single **Deploy** run; with `both`, the EC2 and ECS
+pipelines run side by side inside it. Running *Deploy EC2* or *Deploy ECS*
+manually always deploys to its own platform.
 
 **What the pipeline does for you**
 
@@ -410,6 +412,7 @@ changes don't); set `DEPLOY_TARGET` to the other platform to avoid that.
 | Deployments | Automatic rollback to the last good release when the rollout or smoke tests fail |
 | Deployments | Destroy guard: plans that delete or replace the database, load balancers or KMS key are blocked unless explicitly allowed |
 | Deployments | Documentation-only pushes no longer deploy |
+| Deployments | One **Deploy** run per push (CI runs once, then EC2 and/or ECS) instead of a Deploy EC2 and a Deploy ECS run |
 | Deployments | Deploy EC2 builds only the Packer AMIs; Deploy ECS builds the images (also for rollbacks) |
 | Reliability | Terraform and Packer installs retry on download errors (shared `setup-hashicorp` action) |
 | Security | Trivy scan of every AMI before it is saved; build fails on fixable CRITICAL vulnerabilities |
