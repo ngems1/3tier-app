@@ -26,6 +26,10 @@ delivered by GitHub Actions. The same app can run on **EC2** (Project 1) or on
   dashboards. Offline tests with a mocked AWS provider.
 - **Secure CI/CD** — GitHub Actions signs in to AWS with **OIDC** (no stored AWS
   keys), with separate least-privilege roles for plan, build and deploy.
+  Production can only be deployed from `main`, after an approval.
+- **HTTPS on a real domain** — every environment is served at
+  `https://<env>.sebngembou-cloud.click` (Route 53 + ACM certificate, TLS 1.3,
+  HTTP redirected to HTTPS).
 - **GitHub Flow** — every change goes through a pull request: CI, a read-only
   Terraform plan preview and a manual approval gate before it can be merged
   into a protected `main`.
@@ -289,6 +293,11 @@ merge deploys dev; prod waits for approval, in GitHub or from Slack.
 `main` is protected by a ruleset: pull request required, required status
 checks, no force pushes. See [docs/setup.md](docs/setup.md).
 
+Feature branches are never deployed: they are checked by CI (with a plan
+preview) and deploy only once merged. The pipeline's AWS roles only trust
+`main` (and pull-request checks), and the `prod` environment only accepts
+`main`.
+
 ---
 
 ## Deploying to AWS
@@ -334,7 +343,7 @@ stack name (`dev`, `prod`, `ecs-dev` or `ecs-prod`) to confirm.
 ```mermaid
 flowchart LR
     confirm[Typed name<br/>matches?] --> approve{{prod only:<br/>approval}} --> wait[Waits for any running<br/>deploy of that platform]
-    wait --> unlock[Turn off deletion<br/>protection] --> plan[Destroy plan<br/>in the run summary] --> destroy[terraform destroy<br/>~10-20 min] --> slack([Slack])
+    wait --> unlock[prod only: turn off<br/>deletion protection] --> plan[Destroy plan<br/>in the run summary] --> destroy[terraform destroy<br/>~10-20 min] --> slack([Slack])
 ```
 
 | Removed | Kept (to redeploy later) |
@@ -352,6 +361,10 @@ doesn't apply here on purpose: it protects deploys from deleting the database
 by accident, while Destroy exists to delete it. If a run fails, run it again;
 it only removes what is left. To bring the environment back, run the deploy
 workflow (AMIs and images are reused).
+
+If Destroy stops with **"Error acquiring the state lock"** or **"already
+exists"**, a deploy was interrupted halfway; see
+[Destroy or deploy after an interrupted run](docs/runbook.md#destroy-or-deploy-after-an-interrupted-run).
 
 After destroying, a push to `main` that changes code recreates dev (docs-only
 changes don't); set `DEPLOY_TARGET` to the other platform to avoid that.
@@ -378,12 +391,20 @@ changes don't); set `DEPLOY_TARGET` to the other platform to avoid that.
   certificate is verified against the RDS CA.
 - **Secrets stay out of code** — the Slack webhook lives in a GitHub secret and
   an encrypted SSM parameter, never in Terraform code, plans or state.
+- **Production only from `main`** — three independent locks: the build and
+  plan roles trust only `main` (and pull requests), the `prod` GitHub
+  Environment accepts only `main` with a reviewer's approval (no admin
+  bypass), and the prod deploy role trusts only jobs admitted to that
+  environment.
+- **HTTPS everywhere** — ACM certificates on the public load balancers, TLS 1.3
+  policy, HTTP redirected to HTTPS; the smoke tests check both.
 - **Edge protection** — AWS WAF with AWS managed rules (common threats, known
   bad inputs including Log4j, IP reputation).
 - **Supply chain** — pinned dependencies and security gates that block a
   release on critical findings: Trivy scans the code (every change), the
-  Docker images (ECS) and each AMI before it is saved (EC2), plus ECR's scan
-  on push.
+  Docker images (ECS) and each AMI before it is saved (EC2, including Java
+  libraries), plus ECR's scan on push. A nightly drift check reports any
+  change made outside Terraform.
 
 ## Observability
 
@@ -419,6 +440,11 @@ changes don't); set `DEPLOY_TARGET` to the other platform to avoid that.
 | Deployments | Destroy guard: plans that delete or replace the database, load balancers or KMS key are blocked unless explicitly allowed |
 | Deployments | Documentation-only pushes no longer deploy |
 | Operations | Nightly drift check of every deployed environment, with Slack alerts |
+| Network | HTTPS on `sebngembou-cloud.click` for all four environments (Route 53, ACM, HTTP→HTTPS redirect) |
+| Security | Production deployable only from `main` (OIDC trust + `prod` environment branch rule, no admin bypass) |
+| Security | AMI scan also checks Java libraries (Trivy Java database) and keeps its cache on disk instead of the small RAM `/tmp` |
+| Deployments | Destroy turns off deletion protection only in prod, so it also works after a deploy was interrupted |
+| CI | The pull-request plan preview runs alongside the other checks (faster pull requests) |
 | Deployments | Deploy EC2 builds only the Packer AMIs; Deploy ECS builds the images (also for rollbacks) |
 | Reliability | Terraform and Packer installs retry on download errors (shared `setup-hashicorp` action) |
 | Security | Trivy scan of every AMI before it is saved; build fails on fixable CRITICAL vulnerabilities |

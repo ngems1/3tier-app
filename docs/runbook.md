@@ -88,6 +88,33 @@ What to do:
    the code says.
 3. Changes not deployed yet: approve the pending prod deploy, or deploy it.
 
+## Destroy or deploy after an interrupted run
+
+A deploy or Destroy that is cancelled (or whose runner dies) during
+`terraform apply` can leave two problems behind.
+
+**"Error acquiring the state lock"** (412 PreconditionFailed): the stopped run
+never released its lock.
+
+1. In **Actions**, make sure no Deploy or Destroy of that platform is still
+   running. Never remove a lock while an apply is running.
+2. In **S3**, bucket `cloudbatch818-three-tier-tfstate-seb`, folder
+   `<project>/<env>/`, delete **only** `terraform.tfstate.tflock` (never
+   `terraform.tfstate`). Or in CloudShell:
+   `aws s3 rm s3://cloudbatch818-three-tier-tfstate-seb/<project>/<env>/terraform.tfstate.tflock`
+3. Run the workflow again.
+
+**"… already exists"** (for example the load balancer or the database): the
+stopped apply created the resource in AWS but was killed before Terraform
+recorded it in its state.
+
+- To remove the environment: delete those resources in the console (EC2 →
+  Load Balancers, RDS → Databases, without a final snapshot in dev), wait
+  until they are gone, then run **Destroy** again.
+- To keep the environment: ask for the resources to be imported into the
+  state (`terraform import`) instead of deleting them, then deploy again.
+
+## Rollback
 
 **Application rollback (the usual case).** Redeploy the last known-good release:
 
