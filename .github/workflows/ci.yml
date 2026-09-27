@@ -117,6 +117,10 @@ jobs:
             echo "::endgroup::"
           done
 
+      # The alarm -> Slack Lambda zip is committed; make sure it matches its source.
+      - name: Alarm Lambda package is up to date
+        run: python3 infra/terraform/modules/alarm-slack/build.py --check
+
       - name: Offline stack tests (mocked AWS provider)
         run: |
           for stack in app-stack ecs-stack; do

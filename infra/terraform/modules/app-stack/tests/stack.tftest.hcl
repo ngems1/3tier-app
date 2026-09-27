@@ -292,3 +292,12 @@ run "can_use_an_existing_vpc" {
     error_message = "In a shared VPC each of the stack's 12 subnets must have a flow log"
   }
 }
+
+run "alarms_are_forwarded_to_slack" {
+  command = plan
+
+  assert {
+    condition     = endswith(module.alarm_slack.function_name, "-alarm-to-slack") && startswith(module.alarm_slack.iam_role_name, "cloudbatch818-")
+    error_message = "Each stack must forward its alarms to Slack with a cloudbatch818-prefixed role"
+  }
+}

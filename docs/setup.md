@@ -287,6 +287,7 @@ The pipeline posts to Slack when:
 | A deploy failed (and the rollback failed, or there was nothing to roll back to) | :x: action needed |
 | CI, the build or a plan failed before anything was deployed | :x: which stage failed |
 | An environment was destroyed | :wastebasket: result of the Destroy workflow |
+| A CloudWatch alarm fires or recovers (5XX errors, unhealthy targets, CPU, memory, database...) | :red_circle: ALARM / :large_green_circle: OK, with the stack, the reason and a link to the alarm |
 
 Setup:
 
@@ -297,7 +298,17 @@ Setup:
    repository secret**, name `SLACK_WEBHOOK_URL`, value the webhook URL.
 
 Without the secret the notification steps do nothing, and a Slack outage never
-fails a deployment. Treat the webhook URL like a password: anyone who has it
+fails a deployment.
+
+CloudWatch alarms reach Slack through a small Lambda function in each stack
+(`infra/terraform/modules/alarm-slack`) subscribed to the stack's alarm topic.
+Each deploy stores the webhook in the encrypted SSM parameter
+`/cloudbatch818-three-tier/slack-webhook-url`, which the function reads; the
+URL never goes through Terraform. The deploy role needs `lambda:*` for this,
+so after pulling this change run **Actions → Bootstrap AWS account** with
+**apply** once. To test: publish a message to a stack's
+`<project>-<env>-alarms` SNS topic in the console (SNS → Topics → Publish
+message); it shows up in Slack. Treat the webhook URL like a password: anyone who has it
 can post to that channel.
 
 ## 3. Alarm notifications (optional)

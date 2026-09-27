@@ -190,3 +190,9 @@ variable "alarm_emails" {
   type    = list(string)
   default = []
 }
+
+variable "slack_webhook_parameter_name" {
+  description = "SSM SecureString parameter with the Slack webhook URL for alarm notifications (written by the deploy pipeline from the SLACK_WEBHOOK_URL secret)"
+  type        = string
+  default     = "/cloudbatch818-three-tier/slack-webhook-url"
+}

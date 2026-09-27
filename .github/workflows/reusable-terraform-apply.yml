@@ -77,6 +77,21 @@ jobs:
           name: tfplan-${{ inputs.platform }}-${{ inputs.environment }}-${{ github.run_id }}
           path: ${{ env.TF_DIR }}
 
+      # The alarm -> Slack Lambda reads the webhook from this encrypted
+      # parameter. Written here (not by Terraform) so the URL never appears in
+      # plans, plan artifacts or state.
+      - name: Store the Slack webhook for alarm notifications
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -z "${SLACK_WEBHOOK_URL}" ]; then
+            echo "SLACK_WEBHOOK_URL is not set: CloudWatch alarms won't be posted to Slack."
+            exit 0
+          fi
+          aws ssm put-parameter --name /cloudbatch818-three-tier/slack-webhook-url \
+            --type SecureString --value "${SLACK_WEBHOOK_URL}" --overwrite >/dev/null
+          echo "Slack webhook stored for alarm notifications."
+
       - name: terraform apply (saved plan)
         run: |
           terraform -chdir="$TF_DIR" init -input=false

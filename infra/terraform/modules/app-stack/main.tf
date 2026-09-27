@@ -198,3 +198,16 @@ module "observability" {
   app_min_size                = var.app_min_size
   db_instance_id              = module.database.instance_id
 }
+
+# CloudWatch alarms -> Slack (does nothing until the pipeline has stored the
+# Slack webhook in SSM, see docs/setup.md).
+module "alarm_slack" {
+  source                 = "../alarm-slack"
+  name                   = local.name
+  iam_name               = local.name
+  stack_label            = "EC2 ${var.environment}"
+  sns_topic_arn          = module.observability.sns_topic_arn
+  kms_key_arn            = module.kms.key_arn
+  log_retention_days     = var.log_retention_days
+  webhook_parameter_name = var.slack_webhook_parameter_name
+}
