@@ -27,12 +27,11 @@ module "stack" {
 
   single_nat_gateway = true
 
-  # No domain yet: the app is served over HTTP at the load balancer's address
-  # (see the app_url output). When you have a Route 53 hosted zone, set these
-  # two lines and HTTPS, the certificate and dev.<domain> are created
-  # automatically:
-  #   hosted_zone_name = "example.com"
-  #   record_name      = "dev"
+  # HTTPS: the ACM certificate, the HTTPS listener (HTTP redirects to it)
+  # and dev.sebngembou-cloud.click are created from the Route 53 hosted zone.
+  # Remove these two lines to go back to plain HTTP at the load balancer.
+  hosted_zone_name = "sebngembou-cloud.click"
+  record_name      = "dev"
 
   web_instance_type    = "t3.small"
   app_instance_type    = "t3.small"

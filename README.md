@@ -125,10 +125,16 @@ address ranges:
 | ECS dev | 172.31.160 – 171 |
 | ECS prod | 172.31.176 – 187 |
 
-See [docs/setup.md](docs/setup.md#vpc-quota-full-use-an-existing-vpc). HTTPS
-with a custom domain turns on automatically once a Route 53 hosted zone is
-configured; until then the app is served over HTTP on the load balancer's
-address.
+See [docs/setup.md](docs/setup.md#vpc-quota-full-use-an-existing-vpc). Every
+environment is served over **HTTPS** on the domain `sebngembou-cloud.click`
+(Route 53, ACM certificate, HTTP redirected to HTTPS):
+
+| Stack | Address |
+|---|---|
+| EC2 dev | `https://dev.sebngembou-cloud.click` |
+| EC2 prod | `https://prod.sebngembou-cloud.click` |
+| ECS dev | `https://ecs-dev.sebngembou-cloud.click` |
+| ECS prod | `https://ecs.sebngembou-cloud.click` |
 
 **Database connection hardening:** the API verifies the RDS certificate
 against the RDS CA bundle (TLS required); the RDS parameter group sets

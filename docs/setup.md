@@ -4,14 +4,13 @@ You need admin rights on the GitHub repository, and on AWS either an
 administrator login (Option A) or someone who can create one IAM role for you
 (Option B, below).
 
-**Domain (optional for now):** without a domain, each environment is served
-over plain HTTP at its load balancer's address (the `app_url` output, also
-shown on the GitHub deployment). When you have a public Route 53 hosted zone
-in the same account, uncomment `hosted_zone_name` and `record_name` in
-`infra/terraform/environments/<env>/main.tf` and merge: the certificate,
-HTTPS (with HTTP→HTTPS redirect) and `<env>.<domain>` are created
-automatically. The project plan requires HTTPS, so treat HTTP-only as a
-temporary state.
+**Domain:** the environments use the domain `sebngembou-cloud.click`,
+registered in Route 53 in the same account (Route 53 creates its public
+hosted zone). `hosted_zone_name` and `record_name` in
+`infra/terraform/environments/<env>/main.tf` turn on the ACM certificate,
+HTTPS (with HTTP→HTTPS redirect) and `<env>.<domain>` automatically. The
+hosted zone must exist before the first deploy. To run without a domain
+(plain HTTP at the load balancer's address), remove those two lines.
 
 **Region:** everything runs in **us-east-1**, including the Terraform state.
 Packer bakes the AMIs in the default VPC of us-east-1, so that default VPC

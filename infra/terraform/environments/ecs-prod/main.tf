@@ -24,11 +24,11 @@ module "stack" {
   excluded_zone_ids     = ["use1-az3"]
   single_nat_gateway    = false
 
-  # No domain yet: served over HTTP at the load balancer's address (app_url
-  # output). With a Route 53 hosted zone, set these two lines to get HTTPS
-  # and ecs.<domain> automatically:
-  #   hosted_zone_name = "example.com"
-  #   record_name      = "ecs"
+  # HTTPS: the ACM certificate, the HTTPS listener (HTTP redirects to it)
+  # and ecs.sebngembou-cloud.click are created from the Route 53 hosted zone.
+  # Remove these two lines to go back to plain HTTP at the load balancer.
+  hosted_zone_name = "sebngembou-cloud.click"
+  record_name      = "ecs"
 
   frontend_min_count = 2
   frontend_max_count = 6
