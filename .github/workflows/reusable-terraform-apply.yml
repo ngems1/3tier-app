@@ -28,6 +28,9 @@ on:
         description: Release (commit SHA) being deployed
         type: string
         required: true
+    secrets:
+      SLACK_WEBHOOK_URL:
+        required: false
 
 permissions:
   contents: read
@@ -57,10 +60,10 @@ jobs:
           # A first deploy (RDS Multi-AZ) plus the rollout wait can exceed an hour.
           role-duration-seconds: 7200
 
-      - uses: hashicorp/setup-terraform@v4
+      - uses: ./.github/actions/setup-hashicorp
         with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
+          tool: terraform
+          version: ${{ env.TF_VERSION }}
 
       - name: Record the currently deployed version (rollback target)
         id: previous
@@ -189,3 +192,39 @@ jobs:
                 fi ;;
             esac
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compose the Slack message
+        id: slack
+        if: always()
+        env:
+          STATUS: ${{ job.status }}
+          ROLLBACK: ${{ steps.rollback.outcome }}
+          PREVIOUS: ${{ steps.previous.outputs.version }}
+          VERSION: ${{ inputs.version }}
+          TARGET: ${{ inputs.platform == 'ecs' && 'ECS' || 'EC2' }} ${{ inputs.environment }}
+          APP_URL: ${{ steps.outputs.outputs.app_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "${STATUS}" = "success" ]; then
+            text=":white_check_mark: *${TARGET}* deployed \`${VERSION::7}\` and passed the smoke tests. <${APP_URL}|Open the app> · <${RUN_URL}|Run>"
+          elif [ "${ROLLBACK}" = "success" ]; then
+            text=":rotating_light: *${TARGET}*: release \`${VERSION::7}\` failed and was *automatically rolled back* to \`${PREVIOUS::7}\` (healthy again). Fix it in a new change. <${RUN_URL}|Details>"
+          elif [ "${ROLLBACK}" = "failure" ]; then
+            text=":x: *${TARGET}*: release \`${VERSION::7}\` failed *and the automatic rollback to \`${PREVIOUS::7}\` failed too*. Action needed. <${RUN_URL}|Details>"
+          elif [ "${STATUS}" = "cancelled" ]; then
+            text=":warning: *${TARGET}*: deployment of \`${VERSION::7}\` was cancelled. <${RUN_URL}|Details>"
+          else
+            text=":x: *${TARGET}*: deployment of \`${VERSION::7}\` failed. <${RUN_URL}|Details>"
+          fi
+          {
+            echo "text<<SLACK_EOF"
+            echo "${text}"
+            echo "SLACK_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Notify Slack
+        if: always()
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: ${{ steps.slack.outputs.text }}

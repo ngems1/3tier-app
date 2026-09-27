@@ -275,6 +275,31 @@ to `main` that starts the deployment.
 CodeQL needs code scanning enabled. That's free for public repositories and
 requires GitHub Advanced Security for private ones.
 
+## Pipeline notifications in Slack (optional)
+
+The pipeline posts to Slack when:
+
+| Event | Message |
+|---|---|
+| A deploy finished and passed the smoke tests | :white_check_mark: deployed, with links to the app and the run |
+| Prod is waiting for approval | :hourglass_flowing_sand: with the plan summary (`Plan: x to add, y to change, z to destroy`) and a link to approve |
+| A deploy failed and was rolled back automatically | :rotating_light: which release failed and which one is running again |
+| A deploy failed (and the rollback failed, or there was nothing to roll back to) | :x: action needed |
+| CI, the build or a plan failed before anything was deployed | :x: which stage failed |
+| An environment was destroyed | :wastebasket: result of the Destroy workflow |
+
+Setup:
+
+1. In Slack, create an app with an **incoming webhook**: <https://api.slack.com/apps>
+   → **Create New App → From scratch** → **Incoming Webhooks** → On →
+   **Add New Webhook to Workspace** → pick the channel. Copy the webhook URL.
+2. In GitHub: **Settings → Secrets and variables → Actions → Secrets → New
+   repository secret**, name `SLACK_WEBHOOK_URL`, value the webhook URL.
+
+Without the secret the notification steps do nothing, and a Slack outage never
+fails a deployment. Treat the webhook URL like a password: anyone who has it
+can post to that channel.
+
 ## 3. Alarm notifications (optional)
 
 To receive alarm emails, set `alarm_emails` in

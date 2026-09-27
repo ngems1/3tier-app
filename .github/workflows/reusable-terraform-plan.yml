@@ -21,6 +21,9 @@ on:
         description: Release (commit SHA) to deploy
         type: string
         required: true
+    secrets:
+      SLACK_WEBHOOK_URL:
+        required: false
 
 permissions:
   contents: read
@@ -48,10 +51,10 @@ jobs:
           role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
-      - uses: hashicorp/setup-terraform@v4
+      - uses: ./.github/actions/setup-hashicorp
         with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
+          tool: terraform
+          version: ${{ env.TF_VERSION }}
 
       - name: terraform init
         run: terraform -chdir="$TF_DIR" init -input=false
@@ -78,3 +81,18 @@ jobs:
           # keeping it a few days only allows a late prod approval.
           retention-days: 7
           overwrite: true
+
+      # The apply job for prod now waits for a reviewer: tell them.
+      - name: Summarise the plan for Slack
+        id: summary
+        if: inputs.environment == 'prod'
+        run: |
+          line=$(grep -m1 -E '^Plan: |No changes\.' plan.txt || echo "see the run")
+          echo "line=${line}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Slack (prod waiting for approval)
+        if: inputs.environment == 'prod'
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: ":hourglass_flowing_sand: *${{ inputs.platform == 'ecs' && 'ECS' || 'EC2' }} prod* is waiting for your approval. Release `${{ inputs.version }}` (by ${{ github.actor }}). ${{ steps.summary.outputs.line }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Review deployment>"

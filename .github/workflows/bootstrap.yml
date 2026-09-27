@@ -72,10 +72,10 @@ jobs:
           role-to-assume: ${{ vars.AWS_BOOTSTRAP_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - uses: hashicorp/setup-terraform@v4
+      - uses: ./.github/actions/setup-hashicorp
         with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
+          tool: terraform
+          version: ${{ env.TF_VERSION }}
 
       # ---------------------------------------------------------------------
       # 1. State bucket

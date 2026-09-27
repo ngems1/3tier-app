@@ -34,6 +34,8 @@ delivered by GitHub Actions. The same app can run on **EC2** (Project 1) or on
 - **Safe deployments** — rolling updates with automatic rollback (ASG instance
   refresh / ECS circuit breaker), smoke tests after every deploy, and a manual
   approval before production.
+- **Slack notifications** — deploy results, prod waiting for approval (with
+  the plan summary), automatic rollbacks and pipeline failures.
 - **Operations built in** — CloudWatch logs, metrics, alarms and dashboards,
   one-click rollback to any previous release, and a Destroy workflow to remove
   an environment when you're done.

@@ -90,10 +90,10 @@ jobs:
           # Deleting a Multi-AZ database and NAT gateways can take a while.
           role-duration-seconds: 7200
 
-      - uses: hashicorp/setup-terraform@v4
+      - uses: ./.github/actions/setup-hashicorp
         with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
+          tool: terraform
+          version: ${{ env.TF_VERSION }}
 
       - name: terraform init
         run: terraform -chdir="$TF_DIR" init -input=false
@@ -183,3 +183,10 @@ jobs:
               echo "Some resources may remain. Fix the error above and run Destroy again: it only removes what is left."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify Slack
+        if: always() && steps.state.outputs.resources != '0'
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: "${{ job.status == 'success' && ':wastebasket:' || ':x:' }} *Destroy ${{ env.STACK }}*: ${{ job.status }} (by ${{ github.actor }}). <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Details>"

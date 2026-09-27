@@ -113,6 +113,7 @@ jobs:
       (needs.images.result == 'success' ||
         (needs.images.result == 'skipped' && inputs.version != ''))
     uses: ./.github/workflows/reusable-terraform-plan.yml
+    secrets: inherit
     with:
       platform: ecs
       environment: dev
@@ -128,6 +129,7 @@ jobs:
     # and manual prod runs, which would otherwise skip this job too.
     if: ${{ !cancelled() && needs.plan-dev.result == 'success' }}
     uses: ./.github/workflows/reusable-terraform-apply.yml
+    secrets: inherit
     with:
       platform: ecs
       environment: dev
@@ -152,6 +154,7 @@ jobs:
             (needs.images.result == 'skipped' && inputs.version != '')))
       )
     uses: ./.github/workflows/reusable-terraform-plan.yml
+    secrets: inherit
     with:
       platform: ecs
       environment: prod
@@ -167,6 +170,7 @@ jobs:
     # and manual prod runs, which would otherwise skip this job too.
     if: ${{ !cancelled() && needs.plan-prod.result == 'success' }}
     uses: ./.github/workflows/reusable-terraform-apply.yml
+    secrets: inherit
     with:
       platform: ecs
       environment: prod
@@ -174,3 +178,39 @@ jobs:
     permissions:
       contents: read
       id-token: write
+
+  # Deploy results (success, failure, automatic rollback) are posted by the
+  # apply jobs. This covers failures earlier on: CI, build, images, plans.
+  notify-failure:
+    name: Notify Slack of a pipeline failure
+    needs: [ci, images, plan-dev, plan-prod]
+    if: >-
+      always() && (
+      needs.ci.result == 'failure' ||
+      needs.images.result == 'failure' ||
+      needs.plan-dev.result == 'failure' ||
+      needs.plan-prod.result == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions
+
+      - name: Which stage failed
+        id: failed
+        env:
+          RESULT_CI: ${{ needs.ci.result }}
+          RESULT_IMAGES: ${{ needs.images.result }}
+          RESULT_PLAN_DEV: ${{ needs.plan-dev.result }}
+          RESULT_PLAN_PROD: ${{ needs.plan-prod.result }}
+        run: |
+          failed=""
+          for pair in "ci=${RESULT_CI}" "images=${RESULT_IMAGES}" "plan-dev=${RESULT_PLAN_DEV}" "plan-prod=${RESULT_PLAN_PROD}"; do
+            [ "${pair#*=}" = "failure" ] && failed="${failed:+$failed, }${pair%%=*}"
+          done
+          echo "stages=${failed}" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: ":x: *Deploy ECS* failed before deploying (stage: ${{ steps.failed.outputs.stages }}). Commit `${{ github.sha }}` by ${{ github.actor }}. <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Details>"

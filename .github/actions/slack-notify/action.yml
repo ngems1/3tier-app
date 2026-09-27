@@ -1,0 +1,43 @@
+# Posts one message to Slack through an incoming webhook.
+#
+#   - uses: ./.github/actions/slack-notify   (after actions/checkout)
+#     with:
+#       webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+#       text: ":white_check_mark: *EC2 dev* deployed ..."
+#
+# Never fails the job: when the SLACK_WEBHOOK_URL secret isn't set it does
+# nothing, and if Slack is unreachable it only logs a warning. Text uses
+# Slack's mrkdwn (*bold*, `code`, <https://url|link text>).
+
+name: Notify Slack
+description: Post a message to a Slack incoming webhook (no-op when the webhook is empty).
+
+inputs:
+  webhook:
+    description: Slack incoming webhook URL (pass secrets.SLACK_WEBHOOK_URL)
+    required: false
+    default: ""
+  text:
+    description: Message text (Slack mrkdwn)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Post to Slack
+      shell: bash
+      env:
+        WEBHOOK: ${{ inputs.webhook }}
+        TEXT: ${{ inputs.text }}
+      run: |
+        if [ -z "${WEBHOOK}" ]; then
+          echo "SLACK_WEBHOOK_URL is not set; skipping the Slack notification."
+          exit 0
+        fi
+        payload=$(jq -n --arg text "${TEXT}" '{text: $text}')
+        if curl --fail --silent --show-error --retry 3 --retry-all-errors --max-time 20 \
+          -H 'Content-Type: application/json' --data "${payload}" "${WEBHOOK}" >/dev/null; then
+          echo "Slack notification sent."
+        else
+          echo "::warning::Could not send the Slack notification (the pipeline result is unaffected)."
+        fi

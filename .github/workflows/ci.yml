@@ -100,10 +100,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: hashicorp/setup-terraform@v4
+      - uses: ./.github/actions/setup-hashicorp
         with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
+          tool: terraform
+          version: ${{ env.TF_VERSION }}
 
       - name: Format
         run: terraform fmt -check -recursive infra/terraform
@@ -132,8 +132,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: hashicorp/setup-packer@v3
+      - uses: ./.github/actions/setup-hashicorp
         with:
+          tool: packer
           version: ${{ env.PACKER_VERSION }}
 
       - name: Format
@@ -252,10 +253,10 @@ jobs:
           role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
-      - uses: hashicorp/setup-terraform@v4
+      - uses: ./.github/actions/setup-hashicorp
         with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
+          tool: terraform
+          version: ${{ env.TF_VERSION }}
 
       # Plan infrastructure changes against the release that is currently
       # deployed, so the plan shows only what this pull request changes.

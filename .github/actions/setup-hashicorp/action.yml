@@ -1,0 +1,65 @@
+# Installs a HashiCorp tool (terraform or packer) from releases.hashicorp.com
+# with retries, so a temporary error on the download site (502/503/504,
+# timeouts, dropped connections) doesn't fail the pipeline. The download is
+# checked against HashiCorp's published SHA256 checksums.
+#
+#   - uses: ./.github/actions/setup-hashicorp   (after actions/checkout)
+#     with:
+#       tool: terraform
+#       version: 1.16.4
+
+name: Set up a HashiCorp tool (with retries)
+description: Download terraform or packer with retries and checksum verification, and add it to PATH.
+
+inputs:
+  tool:
+    description: terraform or packer
+    required: true
+  version:
+    description: Exact version, e.g. 1.16.4
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install ${{ inputs.tool }} ${{ inputs.version }}
+      shell: bash
+      env:
+        TOOL: ${{ inputs.tool }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        case "${TOOL}" in
+          terraform|packer) ;;
+          *) echo "::error::tool must be terraform or packer (got '${TOOL}')"; exit 1 ;;
+        esac
+        case "$(uname -m)" in
+          x86_64) arch=amd64 ;;
+          aarch64|arm64) arch=arm64 ;;
+          *) echo "::error::Unsupported architecture $(uname -m)"; exit 1 ;;
+        esac
+
+        base="https://releases.hashicorp.com/${TOOL}/${VERSION}"
+        zip="${TOOL}_${VERSION}_linux_${arch}.zip"
+        sums="${TOOL}_${VERSION}_SHA256SUMS"
+        dest="${RUNNER_TOOL_CACHE:-${RUNNER_TEMP}}/${TOOL}/${VERSION}/${arch}"
+
+        # Up to 6 retries, 10 s apart, on any error including HTTP 5xx.
+        fetch() {
+          curl --fail --silent --show-error --location \
+            --retry 6 --retry-delay 10 --retry-all-errors \
+            --connect-timeout 20 --max-time 300 \
+            --output "$2" "$1"
+        }
+
+        cd "${RUNNER_TEMP}"
+        echo "Downloading ${base}/${zip}"
+        fetch "${base}/${zip}" "${zip}"
+        fetch "${base}/${sums}" "${sums}"
+        grep " ${zip}\$" "${sums}" | sha256sum --check --strict -
+
+        mkdir -p "${dest}"
+        unzip -o -q "${zip}" -d "${dest}"
+        rm -f "${zip}" "${sums}"
+        echo "${dest}" >> "${GITHUB_PATH}"
+        "${dest}/${TOOL}" version

@@ -140,8 +140,9 @@ jobs:
       - name: Publish artifacts to S3 (immutable, per version)
         run: aws s3 cp dist/ "s3://${{ vars.ARTIFACT_BUCKET }}/releases/${VERSION}/" --recursive
 
-      - uses: hashicorp/setup-packer@v3
+      - uses: ./.github/actions/setup-hashicorp
         with:
+          tool: packer
           version: ${{ env.PACKER_VERSION }}
 
       - name: Bake AMIs (skipped if this version already exists)
@@ -188,6 +189,7 @@ jobs:
       ((needs.release.result == 'success' && needs.images.result == 'success') ||
         (needs.release.result == 'skipped' && inputs.version != ''))
     uses: ./.github/workflows/reusable-terraform-plan.yml
+    secrets: inherit
     with:
       platform: ec2
       environment: dev
@@ -203,6 +205,7 @@ jobs:
     # and manual prod runs, which would otherwise skip this job too.
     if: ${{ !cancelled() && needs.plan-dev.result == 'success' }}
     uses: ./.github/workflows/reusable-terraform-apply.yml
+    secrets: inherit
     with:
       platform: ec2
       environment: dev
@@ -227,6 +230,7 @@ jobs:
             (needs.release.result == 'skipped' && inputs.version != '')))
       )
     uses: ./.github/workflows/reusable-terraform-plan.yml
+    secrets: inherit
     with:
       platform: ec2
       environment: prod
@@ -242,6 +246,7 @@ jobs:
     # and manual prod runs, which would otherwise skip this job too.
     if: ${{ !cancelled() && needs.plan-prod.result == 'success' }}
     uses: ./.github/workflows/reusable-terraform-apply.yml
+    secrets: inherit
     with:
       platform: ec2
       environment: prod
@@ -249,3 +254,41 @@ jobs:
     permissions:
       contents: read
       id-token: write
+
+  # Deploy results (success, failure, automatic rollback) are posted by the
+  # apply jobs. This covers failures earlier on: CI, build, images, plans.
+  notify-failure:
+    name: Notify Slack of a pipeline failure
+    needs: [ci, release, images, plan-dev, plan-prod]
+    if: >-
+      always() && (
+      needs.ci.result == 'failure' ||
+      needs.release.result == 'failure' ||
+      needs.images.result == 'failure' ||
+      needs.plan-dev.result == 'failure' ||
+      needs.plan-prod.result == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions
+
+      - name: Which stage failed
+        id: failed
+        env:
+          RESULT_CI: ${{ needs.ci.result }}
+          RESULT_RELEASE: ${{ needs.release.result }}
+          RESULT_IMAGES: ${{ needs.images.result }}
+          RESULT_PLAN_DEV: ${{ needs.plan-dev.result }}
+          RESULT_PLAN_PROD: ${{ needs.plan-prod.result }}
+        run: |
+          failed=""
+          for pair in "ci=${RESULT_CI}" "release=${RESULT_RELEASE}" "images=${RESULT_IMAGES}" "plan-dev=${RESULT_PLAN_DEV}" "plan-prod=${RESULT_PLAN_PROD}"; do
+            [ "${pair#*=}" = "failure" ] && failed="${failed:+$failed, }${pair%%=*}"
+          done
+          echo "stages=${failed}" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/slack-notify
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: ":x: *Deploy EC2* failed before deploying (stage: ${{ steps.failed.outputs.stages }}). Commit `${{ github.sha }}` by ${{ github.actor }}. <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Details>"
