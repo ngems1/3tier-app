@@ -268,14 +268,24 @@ data "aws_iam_policy_document" "deploy" {
   #checkov:skip=CKV_AWS_109:IAM permissions management is limited to roles, policies and instance profiles named with the project prefix.
   #checkov:skip=CKV_AWS_107:The deploy role manages the RDS-managed database secret (Secrets Manager) and passes only project roles.
   #checkov:skip=CKV_AWS_108:The deploy role reads Terraform state and project resources to plan changes; access is limited to this account and the project buckets.
+  #checkov:skip=CKV_AWS_110:Terraform must create project roles and functions; iam:PassRole and lambda:* are limited to cloudbatch818-three-tier-* roles and functions, so no other role can be assumed through them.
   statement {
     sid = "ManageStackServices"
     actions = [
       "acm:*", "application-autoscaling:*", "autoscaling:*", "cloudwatch:*", "ec2:*",
-      "ecs:*", "elasticloadbalancing:*", "kms:*", "lambda:*", "logs:*", "rds:*", "route53:*",
+      "ecs:*", "elasticloadbalancing:*", "kms:*", "logs:*", "rds:*", "route53:*",
       "secretsmanager:*", "sns:*", "ssm:*", "wafv2:*",
     ]
     resources = ["*"]
+  }
+
+  # The alarm -> Slack functions. Only functions named with the project prefix,
+  # and iam:PassRole below only allows project roles, so this can't be used to
+  # run code as any other role in the account.
+  statement {
+    sid       = "ManageProjectFunctions"
+    actions   = ["lambda:*"]
+    resources = ["arn:${local.partition}:lambda:*:${local.account_id}:function:${var.project}-*"]
   }
 
   # ECS task definitions are pinned to the digest of the release's images.
