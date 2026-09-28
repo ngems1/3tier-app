@@ -130,7 +130,7 @@ function Tasks() {
 
   return (
     <div className="tasks">
-      <h1>Sebas Tasks</h1>
+      <h1>My Tasks List</h1>
 
       <form className="task-create" onSubmit={handleCreate}>
         <input
